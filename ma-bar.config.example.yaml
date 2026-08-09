@@ -1,0 +1,49 @@
+# ma-bar-3.49 — user configuration
+#
+# This is the only file you should need to edit. The generator reads it,
+# resolves every name against Music Assistant, fetches and validates artwork,
+# and writes the generated regions of the ESPHome config.
+#
+# See docs/spec.md for why items are addressed by name rather than by URI.
+
+music_assistant:
+  # Music Assistant's own API, not Home Assistant's.
+  url: http://192.168.1.10:8095
+  # The Music Assistant queue entity to play through — its own player entity,
+  # not the underlying speaker's.
+  player: media_player.living_room
+
+home_assistant:
+  url: http://192.168.1.10:8123
+
+artwork:
+  # Where your own images live, checked before Music Assistant's. Files are
+  # named after the item's slug: "Radio Meuh" -> radio_meuh.png
+  # Anything here must already be sized for the tile; the generator rejects
+  # oversized files rather than shipping them to the device.
+  override_base_url: http://192.168.1.10:8123/local/ma-bar
+  # Size requested from Music Assistant's proxy. It allows 80/160/256/512
+  # only and never upscales, so this must be at or above the tile size.
+  proxy_size: 256
+
+# Each section becomes its own run of browser pages, in this order.
+# source: favorites | all | list
+sections:
+  - name: Radio
+    media_type: radio
+    source: all          # only 1 of 15 radios is favorited on the reference
+                         # install — check yours before using `favorites`
+    limit: 20
+
+  - name: Playlists
+    media_type: playlist
+    source: favorites
+
+  - name: Albums
+    media_type: album
+    source: list
+    items:
+      - Kind of Blue
+      # A name that is ambiguous within its media type can pin an explicit URI.
+      - name: Greatest Hits
+        uri: library://album/412

@@ -1,0 +1,16 @@
+# Credentials — never commit. Copy secrets.yaml.example and fill it in.
+secrets.yaml
+.env
+
+# Your own configuration, derived from ma-bar.config.example.yaml
+ma-bar.config.yaml
+
+# ESPHome build output
+.esphome/
+*.bin
+*.elf
+
+# Downloaded artwork cache
+.artwork-cache/
+
+.DS_Store
