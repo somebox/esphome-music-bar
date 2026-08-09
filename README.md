@@ -11,10 +11,27 @@ resolution, pin map and sensors) and it assumes Music Assistant as the backend
 (its image proxy, library API and playback service). Any speaker Music
 Assistant can drive will work — the panel never talks to the player directly.
 
+Your favorites, and what the browser shows, are read at runtime. Changing them
+never means rebuilding or reflashing the panel.
+
 **Status: spec only.** The design is written down in
 [`docs/spec.md`](docs/spec.md); no configuration has been ported into this repo
 yet. It descends from a working private build, so the hard parts are known
 rather than guessed — see "Prior art" below.
+
+## How it fits together
+
+Three pieces:
+
+- **The ESPHome config** on the panel. Fixed widgets, no content — it renders
+  whatever it is handed.
+- **A Home Assistant package** that resolves item names against Music
+  Assistant, and pushes a page of five items to the panel when it asks.
+- **An artwork normalizer** that returns every image at identical dimensions,
+  filling gaps from your own override folder. Not cosmetic: ESPHome
+  reallocates an image buffer whenever the decoded dimensions change, and
+  varying artwork sizes fragment PSRAM until the panel falls over.
+  [`docs/spec.md` §4](docs/spec.md#4-artwork) has the details.
 
 ## Hardware
 
@@ -41,4 +58,4 @@ constraints, and the parts of it marked *proven* were measured on hardware.
 
 ## License
 
-Not yet chosen.
+MIT — see [LICENSE](LICENSE).

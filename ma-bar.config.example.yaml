@@ -1,10 +1,10 @@
 # ma-bar-3.49 — user configuration
 #
-# This is the only file you should need to edit. The generator reads it,
-# resolves every name against Music Assistant, fetches and validates artwork,
-# and writes the generated regions of the ESPHome config.
+# Read by the Home Assistant package (which serves pages to the panel) and by
+# the artwork normalizer. Editing it does not require reflashing the panel.
 #
-# See docs/spec.md for why items are addressed by name rather than by URI.
+# See docs/spec.md for why items are addressed by name rather than by URI,
+# and why artwork goes through a normalizer instead of straight to the device.
 
 music_assistant:
   # Music Assistant's own API, not Home Assistant's.
@@ -17,16 +17,29 @@ home_assistant:
   url: http://192.168.1.10:8123
 
 artwork:
-  # Where your own images live, checked before Music Assistant's. Files are
-  # named after the item's slug: "Radio Meuh" -> radio_meuh.png
-  # Anything here must already be sized for the tile; the generator rejects
-  # oversized files rather than shipping them to the device.
-  override_base_url: http://192.168.1.10:8123/local/ma-bar
-  # Size requested from Music Assistant's proxy. It allows 80/160/256/512
-  # only and never upscales, so this must be at or above the tile size.
+  # Where the normalizer writes, and where the panel reads. The default is
+  # Home Assistant's own www folder, which needs no extra infrastructure:
+  #   <ha-config>/www/ma-bar/  ->  http://<ha>:8123/local/ma-bar/
+  base_url: http://192.168.1.10:8123/local/ma-bar
+  output_dir: /config/www/ma-bar
+
+  # Every image is emitted at exactly this size, square, padded rather than
+  # cropped. Do not vary it per section: identical dimensions across all
+  # tiles are what stop the device from reallocating its image buffers.
+  tile_px: 84
+
+  # Padding and mat colour. Matching them makes the padding invisible.
+  mat_color: "#1E1E1E"
+
+  # Size requested from Music Assistant's proxy before normalizing. It allows
+  # 80/160/256/512 only and never upscales, so keep this above tile_px.
   proxy_size: 256
 
-# Each section becomes its own run of browser pages, in this order.
+  # Your own images, used ahead of anything Music Assistant has. Named by
+  # slug: "Radio Meuh" -> radio_meuh.png. See overrides/README.md.
+  overrides_dir: ./overrides
+
+# Each section contributes its items to the browser, in this order.
 # source: favorites | all | list
 sections:
   - name: Radio

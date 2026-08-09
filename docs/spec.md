@@ -1,9 +1,10 @@
 # ma-bar-3.49 — design spec
 
 What the panel is, what it depends on, and the decisions that shape it. Claims
-marked **proven** were measured on hardware or probed against a live Music
-Assistant instance. Claims marked **unverified** have a named probe in
-[Open questions](#open-questions) and should not be built on until it passes.
+marked **proven** were measured on hardware, probed against a live Music
+Assistant instance, or read out of the ESPHome source at the cited location.
+Claims marked **unverified** have a named probe in
+[Open questions](#10-open-questions) and should not be built on until it passes.
 
 ## 1. Scope
 
@@ -15,15 +16,21 @@ project is deliberately not abstracted away from either:
 and touch from one chip over QSPI; the pin map, the QSPI init sequence and the
 172×640 native geometry are all board-specific. The QMI8658 IMU sits on a
 *second* I²C bus at GPIO47/48, which is why an I²C scan of the touch bus never
-finds it.
+finds it. 16MB flash, octal PSRAM at 80MHz — the framebuffer needs it.
 
-**Music Assistant.** The panel uses MA's image proxy for artwork, MA's library
-API for the item list, and `music_assistant.play_media` for playback. It never
-addresses a speaker directly, so any player MA supports works unchanged.
+**Music Assistant.** The panel uses MA's library API for the item list, MA's
+image proxy for artwork, and `music_assistant.play_media` for playback. It
+never addresses a speaker directly, so any player MA supports works unchanged.
 
-Home Assistant sits between the two. The panel is an ESPHome device using the
-native API, and every value it reads is a flat sensor that Home Assistant
-derives — see [§6](#6-the-home-assistant-contract).
+Everything the panel displays arrives at runtime. Changing your favorites, or
+what the browser shows, never requires a rebuild or a reflash — see
+[§7](#7-runtime-architecture). This is the central design goal and it
+constrains most of what follows.
+
+Three pieces make that work: the ESPHome config on the device, a Home Assistant
+package that resolves items and pushes pages, and a small artwork normalizer
+that guarantees every image arrives at identical dimensions. [§4](#4-artwork)
+explains why the third one is not optional.
 
 ## 2. Screen layout
 
@@ -34,14 +41,20 @@ The bar is short and wide, which drives the whole UI. Two kinds of page:
 icon transport buttons, and a full-height strip down the right edge that opens
 the browser.
 
-**Browser** — pages of five tiles across, each an artwork square on a mat with
+**Browser** — a page of five tiles across, each an artwork square on a mat with
 the item name beneath, plus chevron edge buttons to page through. Tapping a
 tile plays it and returns to Now Playing so the choice is visible. Five across
 rather than six leaves the name enough width to wrap to two readable lines.
 
+There is exactly **one** browser page in the LVGL layout, holding five tile
+widgets. LVGL widgets in ESPHome are created at compile time and cannot be
+added at runtime, so paging means rewriting those five tiles rather than
+navigating between many pre-built pages. That is what keeps the browser
+independent of how many items you have.
+
 ## 3. Items are chosen by name
 
-The configuration file lists items by **name**, not by ID.
+Configuration refers to items by **name**, not by ID.
 
 Music Assistant's own `library://radio/17` style URIs are stable inside one MA
 instance, but they are database row IDs: they mean nothing on anyone else's
@@ -52,88 +65,112 @@ UUID, and radio-browser.info's entries change without the listener's
 involvement or consent.
 
 Names are the thing the user typed, the thing on screen, and the thing that
-survives both. So the config says `WKCR`, and resolution to a URI happens
-during the build.
+survives both. Resolution to a URI happens in Home Assistant at the moment a
+page is built, so a rebuilt library corrects itself on the next page turn.
 
 **Proven**: MA's `music/search` command resolves `"WKCR"` → `library://radio/17`.
 Home Assistant exposes the same thing as `music_assistant.search`, a response
-service taking `name` and `media_type` — so name resolution is available at
-runtime too, not only at build time.
+service taking `name` and `media_type`.
 
 Two consequences to handle:
 
-- Names must be unique within a media type. Each config entry may carry an
+- Names must be unique within a media type. A config entry may carry an
   explicit `uri:` that overrides lookup, as the tiebreak for a genuine clash.
-- A build fails loudly on a name that resolves to nothing. Silently dropping a
-  tile would leave a gap the user has to notice.
+- A name that resolves to nothing renders as a tile marked unresolved rather
+  than vanishing. A silently missing tile is a gap the user has to notice.
 
 ## 4. Artwork
 
-Resolution order for any tile, first hit wins:
+### The constraint that shapes everything
+
+ESPHome allocates a runtime image's pixel buffer lazily, sized to the decoded
+image, and **frees and reallocates it whenever the decoded dimensions change**.
+**Proven** in `runtime_image.cpp`: `resize_buffer_()` returns early only when
+`buffer_width_` and `buffer_height_` both match, and otherwise calls
+`release_buffer_()` before allocating again. Its failure message reports the
+largest free block, not the free total — the failure mode is fragmentation.
+
+A `resize: 84x84` does not prevent this. **Proven** in `RuntimeImage::resize()`:
+with both dimensions fixed it computes one uniform scale factor and preserves
+aspect ratio, so the buffer takes the *source's* shape. Music Assistant's
+artwork is frequently not square and never upscaled — 57×57, 150×150, 160×138
+and 160×76 were all observed in one small station library — which under
+`resize: 84x84` yields buffers of 84×84, 84×84, 84×72 and 84×39 respectively.
+
+Five tile slots turning over on every page turn, each reallocating to a
+different shape, is a fragmentation engine. This is the mechanism behind the
+"PSRAM pressure" that made the prior build abandon its twelve-concurrent-image
+design and retreat to build-time logos in flash.
+
+The fix is to stop the dimensions from varying. If every URL returns exactly
+the tile size, each slot allocates its buffer once on first use and reuses it
+forever — no frees, no fragmentation, and the whole live design becomes safe.
+
+### The normalizer
+
+So artwork does not come from Music Assistant directly. It comes from a small
+service that returns **exactly `N×N` PNG, always**, and resolves in this order:
 
 1. **A user override**, if one exists for that item
 2. **Music Assistant's image proxy**, if it actually returns an image
-3. **A glyph** for the media type (radio, playlist, album)
+3. **A generated placeholder** for the media type
 
-### From Music Assistant
+Non-square sources are padded rather than cropped, onto the same mat colour the
+tile uses, so padding is invisible. Results are cached by slug.
 
-Artwork is fetched through MA's proxy at `?size=256&fmt=png`, never from the
-raw `path` in the API response — those are origin URLs of arbitrary size and
-format, and some are already dead.
+This placement earns its keep several times over:
 
-Three things here are settled, and all three cost real debugging time to learn:
+- Dimensions are guaranteed, which is the requirement above.
+- The "does artwork exist" test happens where it can: **proven**, a `proxy_id`
+  is returned even when there is no artwork — a reference radio item has
+  `images: [{path: "", proxy_id: "3a47…", remotely_accessible: true}]` and the
+  proxy 404s for it. Only a real fetch tells you, and the device should not be
+  the thing making that discovery mid-page-turn.
+- Overrides need no existence check on the device and no failed round trip.
+- Transparency is flattened onto the mat server-side, which MA cannot do —
+  its proxy handler does not expose the flatten argument.
+- Artwork from outside MA becomes possible at all. MA's proxy only accepts its
+  own content hashes, so arbitrary third-party URLs have nowhere else to go.
 
-- **Bounding the source is the only thing that helps.** Decode cost scales with
-  source pixels, not with the size of the slot on screen — a `resize:` in
-  ESPHome applies the scale factor per source pixel, so it does not reduce the
-  work. **Proven**: a 1200px cover logged 2331 ms of blocking decode; the same
-  image at `?size=160` took ~261 ms.
-- **PNG, not JPEG.** ESPHome fixes the image `format:` at compile time, and MA
-  silently returns PNG when a source has an alpha channel — common for station
-  logos. PNG also streams through pngle instead of buffering the whole file.
-- **A `proxy_id` is not a promise of artwork.** **Proven**: a reference radio
-  item returns `images: [{path: "", proxy_id: "3a47…", remotely_accessible: true}]`
-  and the proxy 404s for it. The only test that works is fetching the image.
+Two placements, both viable:
 
-MA's proxy accepts sizes 80/160/256/512 only, never upscales, and only accepts
-its own content hashes. Third-party artwork at an arbitrary URL cannot be
-routed through it.
+**Pre-rendered (recommended).** A script normalizes every item in the
+configured sections into a directory Home Assistant already serves —
+`<ha-config>/www/ma-bar/` at `http://<ha>:8123/local/ma-bar/`. It reruns on a
+timer or when the library changes. The device fetches plain static files, there
+is no service to keep alive, and page turns never wait on a resize.
 
-### User overrides
+**Live proxy.** The same logic behind an HTTP endpoint, resizing on demand. One
+more thing to run, but nothing to invalidate.
 
-Music Assistant's coverage is uneven — on the reference instance 9 of 16
-stations had usable artwork — and some of what it does return is a low-quality
-scrape. So the panel supports a directory of user-supplied images that both
-fills gaps and overrides what MA has.
+Either way the device only ever sees `<base>/<slug>.png`, and the base URL is
+configuration.
 
-Location defaults to Home Assistant's own `www` folder, so no extra
-infrastructure is needed:
+### What is still true of MA's proxy
 
-```
-<ha-config>/www/ma-bar/<slug>.png   →   http://<ha>:8123/local/ma-bar/<slug>.png
-```
+The normalizer fetches from MA at `?size=256&fmt=png`, never from the raw
+`path` in the API response — those are origin URLs of arbitrary size and
+format, and some are already dead. Sizes 80/160/256/512 only, never upscaled.
 
-The slug is derived from the item name, which keeps overrides aligned with the
-name-based config in §3: rename a station in MA and the override follows it.
-The base URL is configurable for anyone serving images elsewhere.
+PNG rather than JPEG, for two reasons that both still apply: ESPHome fixes an
+image's `format:` at compile time, and MA silently returns PNG anyway when a
+source has an alpha channel, which is common for logos. PNG also streams
+through pngle instead of buffering the whole file.
 
-Overrides bypass MA's proxy, which means nothing is bounding them
-server-side — and an unbounded image is the failure mode that crash-looped the
-original build. So the build step validates every override's dimensions and
-byte size against the tile it will fill, and fails on anything oversized rather
-than shipping it to the device.
+Bounding the source remains the only thing that reduces decode cost — it scales
+with source pixels, not with the slot on screen. **Proven**: a 1200px cover
+logged 2331 ms of blocking decode; the same image at `?size=160` took ~261 ms.
+With the normalizer that bound is enforced twice, which is fine.
 
 ### Two rendering traps
 
-Both of these produce a *successfully decoded* image that still looks wrong, so
-a clean decode log proves nothing about what is on screen.
+Both produce a *successfully decoded* image that still looks wrong, so a clean
+decode log proves nothing about what is on screen.
 
-- **Transparency.** Logos arrive in both polarities (light-on-transparent and
-  dark-on-transparent), so the mat behind the image is load-bearing and sits
-  mid-grey. Alpha needs `transparency: ALPHA_CHANNEL`; without it the undefined
-  RGB under transparent pixels gets painted, which is why one logo came out
-  green and another orange. MA cannot flatten transparency server-side — its
-  proxy handler does not expose the flatten argument.
+- **LVGL binds an image source at setup**, when the buffer is still null.
+  `lv_image_set_src` calls `lv_image_decoder_get_info`, that fails, and
+  `reset_image_attributes()` leaves the widget with no source permanently. Every
+  slot must re-bind in `on_download_finished:` via `lvgl.image.update:`.
 - **Byte order.** Do **not** set `byte_order: BIG_ENDIAN`. The display gives
   `lv_conf.h` a `LV_COLOR_16_SWAP 1`, which looks like it demands big-endian
   images but does not: LVGL uses that macro in exactly one place, swapping on
@@ -146,10 +183,13 @@ a clean decode log proves nothing about what is on screen.
 Not just radio. **Proven** against the live API: `music/<type>/library_items`
 accepts a `favorite: true` filter for radios, playlists, albums, artists and
 tracks alike, and Home Assistant exposes the same thing as
-`music_assistant.get_library` with `media_type`, `favorite`, `search` and
-`order_by`. Playback is uniform across types — `play_media` with a
-`media_type` — so a favorite playlist is no harder to put on a tile than a
-radio station.
+`music_assistant.get_library` with `media_type`, `favorite`, `search`,
+`order_by` and `pagination`. Playback is uniform across types — `play_media`
+with a `media_type` — so a favorite playlist is no harder to put on a tile than
+a radio station.
+
+That `pagination` argument matters: it means a page turn is one service call
+for five items, not a full library fetch that Home Assistant then slices.
 
 The catch is that "favorites" is only as useful as the user's tagging. On the
 reference instance:
@@ -169,21 +209,37 @@ source is configurable per section, and a config is a list of sections:
 - `all` — the whole library for that type, optionally capped and ordered
 - an explicit list of names, for a curated set that ignores both
 
-Each section becomes its own run of browser pages. A cap per section keeps a
-419-album library from generating a hundred pages of tiles.
+Sections concatenate into one virtual list that the browser pages through.
 
 ## 6. The Home Assistant contract
 
-The panel reads flat sensors rather than a media player entity, because the
-useful fields are scattered across MA's entity model and template logic belongs
-in Home Assistant, not in device YAML. This repo ships those templates as a
-Home Assistant package so the contract is installable rather than described.
+Home Assistant holds all the logic. The device holds none of it, which is what
+lets the browser change without a rebuild.
 
-The panel needs: title, artist, album-or-station, playback state, and a
-**pre-bounded** artwork URL. That last one is the safety boundary — the sensor
-emits an MA proxy URL with its size and format pinned, or an override URL that
-passed validation, and emits empty otherwise. The device is never handed a URL
-it has to trust.
+**Now playing** reaches the device as flat sensors — title, artist,
+album-or-station, playback state, artwork URL — rather than as a media player
+entity, because the useful fields are scattered across MA's entity model and
+template logic belongs in Home Assistant, not in device YAML. This repo ships
+those templates as an installable package.
+
+**The browser** is a request/response pair:
+
+- The device asks, by calling a Home Assistant script with a page index.
+- Home Assistant answers, by calling back into the device's native API with the
+  five names, five artwork URLs and five URIs for that page, plus how many
+  pages exist.
+
+**Proven** in `api/__init__.py`: user-defined API actions accept `string[]`,
+`int[]`, `float[]` and `bool[]` argument types, so one call carries a whole
+page. Two things about how they are passed:
+
+- Arrays arrive as `FixedVector<T> const&`, a **non-owning view into the receive
+  buffer**, which is reused as soon as the synchronous part of the handler
+  returns. The handler must copy into globals immediately rather than holding
+  the reference.
+- If the handler contains anything non-synchronous — `delay`, `wait_until`,
+  `script.wait` — ESPHome switches that action to owning `std::vector` types.
+  Keeping the handler synchronous is the simpler contract.
 
 One live-instance quirk to absorb: **proven**, MA answers on two ports (8095
 and 8097) and Home Assistant alternates `entity_picture` between them, so
@@ -193,29 +249,33 @@ currently *on screen* rather than the last one requested — ESPHome's
 `online_image` silently drops an update while a download is in flight, so a
 requested-URL variable can advance without anything having changed.
 
-## 7. Build modes
+## 7. Runtime architecture
 
-The browser's tile artwork can come from flash or from the network, and the
-tradeoff is sharp enough that both are worth having.
+Five tile widgets and six image slots, all fixed at compile time; everything
+else is data.
 
-**Baked** (the default, and what the prior build proved). A generator script
-resolves names to URIs, fetches and validates artwork, and writes ESPHome
-`image:` entries using build-time web fetch. Logos compile into flash and cost
-no RAM at runtime — **proven**: adding nine logos moved flash from 1,297,760 to
-1,396,635 bytes while RAM moved only 116,691 → 118,187. Nothing is fetched or
-decoded while the panel is running. Changing your favorites means regenerating
-and reflashing.
+A page turn goes: device calls the Home Assistant script → script queries MA
+with `pagination` → script calls the device's API action with three arrays →
+device copies them into globals, writes the five labels, and points the five
+tile image slots at their URLs via `online_image.set_url` → each slot re-binds
+its LVGL widget in `on_download_finished`.
 
-**Live** (later). A fixed pool of tile widgets is populated at runtime from
-Home Assistant, one `online_image` per visible slot. Favorites change without a
-reflash, at the cost of PSRAM and fetch latency on every page turn.
+Labels land immediately; artwork arrives as it downloads. The sixth image slot
+is the Now Playing thumbnail, which is independent.
 
-Baked ships first. Live stays a design goal so that nothing in the config
-schema or the HA contract forecloses it.
+Because every URL returns the same `N×N`, each slot allocates once on first use
+and never reallocates. That is the whole reason this is safe to do at runtime,
+and it is a property of the normalizer rather than of the device config — if a
+differently-sized image ever reaches a slot, the fragmentation described in §4
+comes back.
 
-Generated regions are delimited by explicit `# >>> BEGIN GENERATED …` markers
-and are overwritten in place on every run, so hand edits inside them do not
-survive.
+Two things still need measuring before this is settled: the PSRAM cost of six
+concurrent slots alongside the framebuffer, and whether five parallel fetches
+plus decodes make a page turn feel slow. Both probes are in §10. If page turns
+do drag, the fallback is to reuse the prior build's proven approach for a
+subset — build-time logos in flash, which cost **proven** 98KB of flash and
+1.5KB of RAM for nine images — as a static first section, with live pages
+behind it.
 
 ## 8. Prerequisites
 
@@ -225,7 +285,7 @@ Before any of this works on a given install:
   with the display and touchscreen left native. Current ESPHome rotates LVGL
   hit-testing internally to match; earlier versions do not. The raw
   `touchscreen: on_touch` trigger still reports un-rotated coordinates, which
-  is expected rather than a bug.
+  is expected rather than a bug. Developed against 2026.7.3.
 - **Home Assistant's per-device action toggle must be on.** Settings → Devices
   & Services → ESPHome → *device* → gear → "Allow the device to perform Home
   Assistant actions". It defaults off on recent Home Assistant and silently
@@ -235,38 +295,42 @@ Before any of this works on a given install:
   Profile. The token embedded in Home Assistant's `music_assistant` config
   entry is a different credential and does not authenticate against MA's own
   API port.
+- **Somewhere to run the normalizer**, with Pillow. Any host that can reach MA
+  and write to Home Assistant's `www` folder.
 - **Correct MDI codepoints.** Icon glyphs are pulled from the Material Design
   Icons webfont at build time. Verify codepoints against `meta.json` in
   `Templarian/MaterialDesign-SVG`; several sit one digit from unrelated icons.
 
-## 9. Open questions
-
-Each of these needs its probe to pass before the design above depends on it.
-
-- **Does `play_media` accept a bare name?** The service takes `media_id` with an
-  `object` selector and carries `artist`/`album` disambiguation fields, which
-  implies name search, but this is **unverified** — the probe plays audio in a
-  real room, so it was not run during spec writing. *Probe*: call
-  `music_assistant.play_media` with `media_id: "WKCR"`, `media_type: radio`
-  against a test player and check the queue. If it fails, the fallback costs
-  nothing structurally: resolve through `music_assistant.search` first and pass
-  the URI it returns.
-- **How many runtime `online_image` slots fit?** Live mode needs a number.
-  *Probe*: build with 5 slots at 84×84 RGB565 and read the ESPHome heap report,
-  then confirm a page turn does not stall the UI.
-- **Does the IMU auto-rotation actually flip the screen?** **Unverified** in the
-  prior build. The IMU reads reliably and `lvgl.display.set_rotation` is a real
-  runtime action whose rotation touch input follows, but the screen was never
-  observed rotating — the one hands-on test was discarded by a debounce window.
-  Gravity is inferred to sit on the Y axis; Z is the untried alternative.
-- **Does a tile survive a library rebuild?** The name-based design predicts yes.
-  *Probe*: rebuild the MA library, regenerate, and confirm the emitted URIs
-  changed while the config file did not.
-
-## 10. Known LVGL trap
+## 9. Known LVGL trap
 
 A plain `obj` nested inside a button swallows presses: LVGL sets
 `LV_OBJ_FLAG_CLICKABLE` by default on `obj`, while `label` and `image` both
 remove it. In the prior build this made the grey mat behind each logo eat every
 tap on the artwork, leaving only the name tappable. Decorative containers need
 `clickable: false`.
+
+## 10. Open questions
+
+Each needs its probe to pass before the design above depends on it.
+
+- **Does `play_media` accept a bare name?** The service takes `media_id` with an
+  `object` selector and carries `artist`/`album` disambiguation fields, which
+  implies name search, but this is **unverified** — the probe plays audio in a
+  real room. *Probe*: call `music_assistant.play_media` with `media_id: "WKCR"`,
+  `media_type: radio` against a test player and check the queue. Costs nothing
+  structurally if it fails: pages already carry resolved URIs, so tiles can
+  simply play those.
+- **What do six concurrent image slots cost?** *Probe*: build with six slots at
+  the tile size plus the framebuffer, read the ESPHome heap report, then page
+  back and forth thirty times and confirm the largest free block has not moved.
+  The second half is the one that matters — total free PSRAM is not the metric.
+- **How slow is a page turn?** *Probe*: log the interval from tap to the fifth
+  `on_download_finished`, cold and warm. Decide against a target of one second
+  to first paint, artwork allowed to trail.
+- **Does the IMU auto-rotation actually flip the screen?** **Unverified** in the
+  prior build. The IMU reads reliably and `lvgl.display.set_rotation` is a real
+  runtime action whose rotation touch input follows, but the screen was never
+  observed rotating — the one hands-on test was discarded by a debounce window.
+  Gravity is inferred to sit on the Y axis; Z is the untried alternative.
+- **Does a tile survive a library rebuild?** The name-based design predicts yes,
+  with no user action. *Probe*: rebuild the MA library and turn a page.
