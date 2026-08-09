@@ -15,6 +15,18 @@
 ESPHOME ?= esphome
 DEVICE  ?= music-bar-kitchen
 YAML     = $(DEVICE).yaml
+
+# Where to flash or read logs from. Leave unset and ESPHome asks — which is
+# fine interactively and unhelpful in a loop. Set it to a serial port for a
+# cable flash, or to a hostname once the panel is on Wi-Fi and you want OTA:
+#
+#   make factory-run PORT=/dev/cu.usbmodem112201
+#   make logs        PORT=music-bar-a1b2c3.local
+#
+# The first flash of a panel running other firmware has to be over the cable;
+# OTA needs the panel already running a build of this project.
+PORT ?=
+DEVICE_ARG = $(if $(PORT),--device $(PORT),)
 FACTORY_YAML := music-bar.factory.factory.yaml
 # probe-image-slots.yaml is deliberately absent: online_image needs a display:
 # block, which lands with the AXS15231B port. Add it here at the same time.
@@ -22,7 +34,7 @@ ALL_CONFIGS := music-bar.base.yaml music-bar.example.yaml music-bar.factory.yaml
                music-bar.factory.factory.yaml
 
 .PHONY: version config compile run logs clean factory-config factory factory-run \
-        probe smoke-test
+        factory-logs probe smoke-test
 
 version:
 	@$(ESPHOME) version
@@ -34,10 +46,10 @@ compile:
 	$(ESPHOME) compile $(YAML)
 
 run:
-	$(ESPHOME) run $(YAML)
+	$(ESPHOME) run $(YAML) $(DEVICE_ARG)
 
 logs:
-	$(ESPHOME) logs $(YAML)
+	$(ESPHOME) logs $(YAML) $(DEVICE_ARG)
 
 clean:
 	rm -rf .esphome
@@ -50,12 +62,16 @@ factory: factory-config
 	$(ESPHOME) compile $(FACTORY_YAML)
 
 factory-run: factory
-	$(ESPHOME) run $(FACTORY_YAML)
+	$(ESPHOME) run $(FACTORY_YAML) $(DEVICE_ARG)
+
+# Logs from the factory build, without recompiling.
+factory-logs:
+	$(ESPHOME) logs $(FACTORY_YAML) $(DEVICE_ARG)
 
 # The PSRAM probe from docs/plan.md phase 1. Flash it, then page back and
 # forth and watch the largest free block rather than the free total.
 probe:
-	$(ESPHOME) run probe-image-slots.yaml
+	$(ESPHOME) run probe-image-slots.yaml $(DEVICE_ARG)
 
 # Automated smoke test (no hardware). Validates every config and compiles the
 # factory binary. Run before pushing. On-device checks are in docs/plan.md.

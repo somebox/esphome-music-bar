@@ -111,7 +111,15 @@ To build from a clone:
 
 ```bash
 make smoke-test      # validate configs, compile the factory image, run tests
-make factory-run     # compile, flash and monitor
+
+# First flash of a panel has to be over the cable. Find the port with
+# `ls /dev/cu.*` on macOS or `ls /dev/ttyUSB* /dev/ttyACM*` on Linux; omit PORT
+# and ESPHome will ask.
+make factory-run  PORT=/dev/cu.usbmodem112201
+
+# Afterwards it is on Wi-Fi, so updates and logs can go over the air.
+make factory-run  PORT=music-bar-a1b2c3.local
+make factory-logs PORT=music-bar-a1b2c3.local   # reconnect, no recompile
 ```
 
 | File | Role |
