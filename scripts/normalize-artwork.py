@@ -4,7 +4,7 @@
 # dependencies = ["pillow>=10.1", "pyyaml>=6"]
 # ///
 """
-Normalize artwork for every item the ma-bar browser can show.
+Normalize artwork for every item the music-bar browser can show.
 
 Emits one PNG per item at exactly tile_px square, so the panel's image slots
 allocate their buffers once and never reallocate. ESPHome frees and reallocates
@@ -20,25 +20,37 @@ Artwork for each item resolves in this order:
 
 Nothing is ever left blank, and nothing unbounded reaches the device.
 
+Artwork is an upgrade, not a prerequisite: with none of this set up the panel
+draws its own monograms. What this adds is real artwork at guaranteed
+dimensions, which is what makes five concurrent image slots safe.
+
 Usage:
-    scripts/normalize-artwork.py --config ma-bar.config.yaml
+    scripts/normalize-artwork.py --config music-bar.config.yaml
+    scripts/normalize-artwork.py --check           # can it work at all?
     scripts/normalize-artwork.py --report          # what has what, write nothing
     scripts/normalize-artwork.py --out /tmp/try    # somewhere else, for a look
+
+The Music Assistant token comes from $MA_TOKEN, --token, or secrets.yaml, in
+that order.
 """
 
 from __future__ import annotations
 
 import argparse
 import colorsys
+import datetime
+import difflib
 import hashlib
 import io
 import json
+import os
 import re
 import sys
 import unicodedata
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import NamedTuple
 
 import yaml
 from PIL import Image, ImageDraw, ImageFont
@@ -49,6 +61,18 @@ REPO = Path(__file__).resolve().parent.parent
 # because that is what Home Assistant's services take.
 ENDPOINT = {
     "radio": "radios",
+    "playlist": "playlists",
+    "album": "albums",
+    "artist": "artists",
+    "track": "tracks",
+}
+
+# Search results are keyed differently again: plural for everything except
+# radio. Proven against the reference instance — music/search returns
+# artists / albums / genres / tracks / playlists / radio / audiobooks /
+# podcasts / sound_effects, so looking up "album" finds nothing at all.
+RESULT_KEY = {
+    "radio": "radio",
     "playlist": "playlists",
     "album": "albums",
     "artist": "artists",
@@ -88,19 +112,33 @@ class MusicAssistant:
         return self.command(f"music/{ENDPOINT[media_type]}/library_items", args)
 
     def find(self, name: str, media_type: str) -> dict | None:
-        """Resolve a name to a library item. Exact match wins; otherwise the
-        first result, because MA orders by relevance."""
-        res = self.command(
-            "music/search",
-            {"search_query": name, "media_types": [media_type], "limit": 5},
-        )
-        hits = res.get(media_type if media_type != "radio" else "radio", [])
-        if not hits:
-            return None
-        for h in hits:
-            if h.get("name", "").casefold() == name.casefold():
-                return h
-        return hits[0]
+        """Resolve a name to an item. Exact match wins; otherwise the first
+        result, because MA orders by relevance.
+
+        The library is searched first. Without `library_only` MA also searches
+        every streaming provider, and a provider hit can outrank the library
+        item — "Kind of Blue" comes back as spotify://album/… rather than
+        library://album/N. Falling through to the wider search afterwards means
+        a `list` section can still name something not yet in the library.
+        """
+        for library_only in (True, False):
+            res = self.command(
+                "music/search",
+                {
+                    "search_query": name,
+                    "media_types": [media_type],
+                    "limit": 5,
+                    "library_only": library_only,
+                },
+            )
+            hits = res.get(RESULT_KEY[media_type], [])
+            if not hits:
+                continue
+            for h in hits:
+                if h.get("name", "").casefold() == name.casefold():
+                    return h
+            return hits[0]
+        return None
 
     def artwork_url(self, item: dict, size: int) -> str | None:
         """The proxy URL for an item's thumbnail, if it claims to have one.
@@ -117,15 +155,28 @@ class MusicAssistant:
         return f"{self.url}/imageproxy/{thumb['proxy_id']}?size={size}&fmt=png"
 
 
-def fetch(url: str, timeout: int = 20) -> bytes | None:
+class Fetched(NamedTuple):
+    """`transient` separates "MA says there is no artwork here" from "MA could
+    not be reached". The first is an answer and a monogram is the right
+    response; the second says nothing, and treating it as an answer would
+    replace every real tile with a monogram, change every fingerprint, and make
+    the panel refetch the lot the next time it turns a page."""
+
+    data: bytes | None
+    transient: bool
+
+
+def fetch(url: str, timeout: int = 20) -> Fetched:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as r:
-            if r.status != 200:
-                return None
             data = r.read()
-            return data or None
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError):
-        return None
+            return Fetched(data or None, False)
+    except urllib.error.HTTPError as e:
+        # 404 is MA answering: a proxy_id exists but there is nothing behind
+        # it. 5xx is MA having a bad day and means nothing either way.
+        return Fetched(None, e.code >= 500)
+    except (urllib.error.URLError, OSError):
+        return Fetched(None, True)
 
 
 # ── Naming ──────────────────────────────────────────────────────────────────
@@ -145,6 +196,38 @@ def find_override(overrides_dir: Path, slug: str) -> Path | None:
         if candidate.is_file():
             return candidate
     return None
+
+
+def suggest_renames(orphans: list[str], gaps: list[dict]) -> list[tuple[str, str]]:
+    """Pair override files that match nothing against items now showing a
+    monogram, so a rename can be offered rather than merely reported.
+
+    Renaming an item is the one thing that reliably orphans an override, and
+    Music Assistant made renaming a supported operation for manually added
+    items in 2.9.0 — so this went from a rare accident to something users are
+    invited to do. There is no stabler key to use instead: library URIs are
+    keyed off the stream URL and change whenever a URL is corrected, and the
+    provider IDs beneath them change upstream without the listener's
+    involvement. Names remain the most durable handle, so the answer is to make
+    the repair obvious rather than to key on something else.
+
+    Only near-misses are offered. An orphan that resembles nothing is left to
+    the plain report, because a confident wrong suggestion is worse than none.
+    """
+    wanted = {m["slug"]: m["name"] for m in gaps}
+    if not wanted:
+        return []
+
+    pairs = []
+    taken: set[str] = set()
+    for filename in orphans:
+        stem = Path(filename).stem
+        candidates = [s for s in wanted if s not in taken]
+        match = difflib.get_close_matches(stem, candidates, n=1, cutoff=0.6)
+        if match:
+            taken.add(match[0])
+            pairs.append((filename, f"{match[0]}.png"))
+    return pairs
 
 
 # ── Image work ──────────────────────────────────────────────────────────────
@@ -174,13 +257,33 @@ def initials(name: str) -> str:
     return (words[0][0] + words[1][0]).upper()
 
 
+def fnv1a(text: str) -> int:
+    """32-bit FNV-1a over UTF-8.
+
+    The panel draws its own monograms when no artwork is configured, so both
+    sides have to agree on the colour for an item. This is the shared hash:
+    cheap enough to run in a lambda on the device, and reproduced exactly in
+    esphome/includes/music_bar_monogram.h. Do not change one without the other.
+    """
+    h = 0x811C9DC5
+    for b in text.encode("utf-8"):
+        h = ((h ^ b) * 0x01000193) & 0xFFFFFFFF
+    return h
+
+
+def monogram_colors(name: str) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    """Background and foreground for an item's monogram."""
+    h = fnv1a(name) / 0xFFFFFFFF
+    bg = tuple(int(c * 255) for c in colorsys.hsv_to_rgb(h, 0.45, 0.40))
+    fg = tuple(int(c * 255) for c in colorsys.hsv_to_rgb(h, 0.12, 0.96))
+    return bg, fg
+
+
 def monogram(name: str, px: int) -> Image.Image:
     """A placeholder that reads as a design choice rather than a failure: the
     hue is derived from the name, so every tile differs and the same item is
     the same colour every time."""
-    h = int(hashlib.sha256(name.encode()).hexdigest()[:8], 16) / 0xFFFFFFFF
-    bg = tuple(int(c * 255) for c in colorsys.hsv_to_rgb(h, 0.45, 0.40))
-    fg = tuple(int(c * 255) for c in colorsys.hsv_to_rgb(h, 0.12, 0.96))
+    bg, fg = monogram_colors(name)
 
     img = Image.new("RGB", (px, px), bg)
     draw = ImageDraw.Draw(img)
@@ -314,9 +417,9 @@ file for any of them replaces what is here — yours always wins.</p>
     html = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ma-bar artwork</title><style>{GALLERY_CSS}</style></head>
+<title>music-bar artwork</title><style>{GALLERY_CSS}</style></head>
 <body><div class="wrap">
-<h1>ma-bar artwork</h1>
+<h1>music-bar artwork</h1>
 <p>Every tile the panel can show, {px}&times;{px}. Tap a filename to select it.</p>
 <div class="note"><strong>To replace a tile</strong>
 <ol>
@@ -339,9 +442,21 @@ def parse_color(value: str) -> tuple[int, int, int]:
 # ── Gathering items ─────────────────────────────────────────────────────────
 
 
-def gather(ma: MusicAssistant, sections: list[dict]) -> list[dict]:
+def gather(ma: MusicAssistant, sections: list[dict]) -> tuple[list[dict], list[str]]:
+    """Flatten the configured sections into one list, in order.
+
+    Returns the items and any slug collisions worth telling the user about.
+    Names only have to be unique within a media type (spec section 3), but a
+    slug is the artwork filename and those share one namespace — a station and
+    an album both called "Blue" would otherwise map to the same file and one
+    tile would silently vanish. Identity is therefore (media_type, slug): the
+    same item appearing in two sections is still deduplicated, and a genuine
+    clash across types keeps both by suffixing the later one.
+    """
     items: list[dict] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
+    slug_owner: dict[str, str] = {}
+    collisions: list[str] = []
 
     for section in sections:
         media_type = section["media_type"]
@@ -373,38 +488,140 @@ def gather(ma: MusicAssistant, sections: list[dict]) -> list[dict]:
         for f in found:
             f["media_type"] = media_type
             f["section"] = section.get("name", media_type)
-            f["slug"] = slugify(f["name"])
-            if f["slug"] in seen:
+            base = slugify(f["name"])
+
+            if (media_type, base) in seen:
                 continue
-            seen.add(f["slug"])
+            seen.add((media_type, base))
+
+            slug = base
+            owner = slug_owner.get(base)
+            if owner is not None and owner != media_type:
+                slug = f"{base}_{media_type}"
+                collisions.append(
+                    f"{f['name']} ({media_type}) collides with a {owner} of the "
+                    f"same name — its artwork is {slug}.png"
+                )
+            else:
+                slug_owner[base] = media_type
+
+            f["slug"] = slug
             items.append(f)
 
-    return items
+    return items, collisions
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
 
 
-def read_secret(path: Path, key: str) -> str:
+def resolve_token(cli_token: str | None, secrets: Path) -> str:
+    """$MA_TOKEN, then --token, then secrets.yaml.
+
+    The environment comes first so the Home Assistant integration and any
+    container can supply the token without a file, and so the only credential
+    this project needs never has to be written down next to device config.
+    """
+    env = os.environ.get("MA_TOKEN")
+    if env:
+        return env
+    if cli_token:
+        return cli_token
+    if not secrets.is_file():
+        sys.exit(
+            f"error: no Music Assistant token — set $MA_TOKEN, pass --token, or "
+            f"copy secrets.yaml.example to {secrets}"
+        )
+    data = yaml.safe_load(secrets.read_text()) or {}
+    if "ma_api_token" not in data:
+        sys.exit(f"error: ma_api_token not found in {secrets}")
+    return str(data["ma_api_token"])
+
+
+def load_previous(out_dir: Path) -> dict[str, dict]:
+    """The last run's manifest, keyed by slug. Used to hold on to a tile whose
+    artwork could not be refetched this time."""
+    path = out_dir / "manifest.json"
     if not path.is_file():
-        sys.exit(f"error: {path} not found — copy secrets.yaml.example and fill it in")
-    data = yaml.safe_load(path.read_text()) or {}
-    if key not in data:
-        sys.exit(f"error: {key} not found in {path}")
-    return str(data[key])
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return {m["slug"]: m for m in data.get("items", []) if "slug" in m}
+
+
+def check(cfg: dict, token: str, out_dir: Path, overrides_dir: Path, px: int) -> int:
+    """Answer "would a real run work?" without writing anything."""
+    problems = []
+    ma_url = cfg["music_assistant"]["url"]
+
+    ma = MusicAssistant(ma_url, token)
+    try:
+        ma.command("music/radios/library_items", {"limit": 1})
+        print(f"  ok    Music Assistant reachable and the token works ({ma_url})")
+    except urllib.error.HTTPError as e:
+        problems.append(
+            f"Music Assistant rejected the token ({e.code}). Create a long-lived "
+            f"token in the MA UI under Settings -> Profile — the one inside Home "
+            f"Assistant's music_assistant config entry is a different credential."
+        )
+    except (urllib.error.URLError, OSError) as e:
+        problems.append(f"Music Assistant unreachable at {ma_url}: {e}")
+
+    if overrides_dir.is_dir():
+        print(f"  ok    overrides readable ({overrides_dir})")
+    else:
+        print(f"  note  no overrides directory yet ({overrides_dir}) — that is fine")
+
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        probe = out_dir / ".music-bar-write-test"
+        probe.write_bytes(b"")
+        probe.unlink()
+        print(f"  ok    output directory writable ({out_dir})")
+    except OSError as e:
+        problems.append(f"cannot write to {out_dir}: {e}")
+
+    previous = out_dir / "manifest.json"
+    if previous.is_file():
+        try:
+            was = json.loads(previous.read_text()).get("tile_px")
+            if was is not None and was != px:
+                problems.append(
+                    f"existing artwork is {was}px but the config says {px}px. Every "
+                    f"cached tile is the wrong size; rerun with --force to redraw."
+                )
+            else:
+                print(f"  ok    existing artwork matches tile_px {px}")
+        except (json.JSONDecodeError, OSError):
+            problems.append(f"{previous} is not readable JSON")
+
+    # Whether the firmware agrees about tile_px is checked by the Home
+    # Assistant side, which can read the panel's reported value; this script
+    # has no route to the device.
+
+    if problems:
+        print("\nproblems:")
+        for p in problems:
+            print(f"  ! {p}")
+        return 1
+    print("\nready")
+    return 0
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--config", type=Path, default=REPO / "ma-bar.config.yaml")
+    ap.add_argument("--config", type=Path, default=REPO / "music-bar.config.yaml")
     ap.add_argument("--secrets", type=Path, default=REPO / "secrets.yaml")
+    ap.add_argument("--token", help="Music Assistant token; overrides secrets.yaml")
     ap.add_argument("--out", type=Path, help="override artwork.output_dir")
+    ap.add_argument("--check", action="store_true", help="test the setup, write nothing")
     ap.add_argument("--report", action="store_true", help="show sources, write nothing")
     ap.add_argument("--force", action="store_true", help="rewrite unchanged tiles")
     args = ap.parse_args()
 
     if not args.config.is_file():
-        sys.exit(f"error: {args.config} not found — copy ma-bar.config.example.yaml")
+        sys.exit(f"error: {args.config} not found — copy music-bar.config.example.yaml")
     cfg = yaml.safe_load(args.config.read_text())
 
     art = cfg.get("artwork", {})
@@ -418,18 +635,38 @@ def main() -> int:
         overrides_dir = (args.config.parent / overrides_dir).resolve()
     out_dir = args.out or Path(art["output_dir"])
 
-    ma = MusicAssistant(
-        cfg["music_assistant"]["url"], read_secret(args.secrets, "ma_api_token")
-    )
+    token = resolve_token(args.token, args.secrets)
 
-    items = gather(ma, cfg["sections"])
+    if args.check:
+        return check(cfg, token, out_dir, overrides_dir, px)
+
+    ma = MusicAssistant(cfg["music_assistant"]["url"], token)
+
+    # Building the item list is all-or-nothing: without it there is nothing to
+    # normalize, and a traceback is a poor way to say "Music Assistant is off".
+    try:
+        items, collisions = gather(ma, cfg["sections"])
+    except urllib.error.HTTPError as e:
+        sys.exit(
+            f"error: Music Assistant refused the request ({e.code}). "
+            f"Run --check to test the token."
+        )
+    except (urllib.error.URLError, OSError) as e:
+        sys.exit(
+            f"error: cannot reach Music Assistant at "
+            f"{cfg['music_assistant']['url']}: {e}\n"
+            f"Nothing was written. Existing artwork is untouched."
+        )
+
     print(f"{len(items)} items across {len(cfg['sections'])} sections\n")
 
     if not args.report:
         out_dir.mkdir(parents=True, exist_ok=True)
 
+    previous = load_previous(out_dir)
     manifest = []
-    counts = {"override": 0, "music_assistant": 0, "monogram": 0}
+    counts = {"override": 0, "music_assistant": 0, "monogram": 0, "kept": 0}
+    unreachable: list[str] = []
 
     for item in items:
         slug = item["slug"]
@@ -444,14 +681,33 @@ def main() -> int:
             else:
                 source = "override"
 
+        target = out_dir / f"{slug}.png"
+
         if image is None and item["raw"]:
             url = ma.artwork_url(item["raw"], proxy_size)
             if url:
-                data = fetch(url)
-                if data:
-                    image = normalize(data, px, mat, inset)
+                got = fetch(url)
+                if got.data:
+                    image = normalize(got.data, px, mat, inset)
                     if image is not None:
                         source = "music_assistant"
+                elif got.transient:
+                    # Do not answer a question MA failed to answer. If this tile
+                    # already has real artwork, keep the file and its fingerprint
+                    # exactly as they are — replacing it with a monogram would
+                    # move the URL and make the panel refetch a downgrade.
+                    was = previous.get(slug)
+                    if (
+                        was
+                        and was.get("artwork") in ("music_assistant", "override")
+                        and target.is_file()
+                    ):
+                        counts["kept"] += 1
+                        unreachable.append(slug)
+                        manifest.append({**was, "name": item["name"]})
+                        print(f"  ...  {slug:<34} kept (Music Assistant unreachable)")
+                        continue
+                    unreachable.append(slug)
 
         if image is None:
             image = monogram(item["name"], px)
@@ -460,7 +716,6 @@ def main() -> int:
         image = round_corners(image, radius, mat)
 
         counts[source] += 1
-        target = out_dir / f"{slug}.png"
 
         buf = io.BytesIO()
         image.save(buf, "PNG", optimize=True)
@@ -495,7 +750,16 @@ def main() -> int:
         f"\n{counts['override']} from your overrides, "
         f"{counts['music_assistant']} from Music Assistant, "
         f"{counts['monogram']} generated"
+        + (f", {counts['kept']} kept from the last run" if counts["kept"] else "")
     )
+
+    if collisions:
+        print(
+            f"\n{len(collisions)} name collision(s) across media types. Both tiles "
+            f"are kept,\nbut the later one uses a suffixed filename:"
+        )
+        for c in collisions:
+            print(f"    {c}")
 
     known = {m["slug"] for m in manifest}
     orphans = sorted(
@@ -503,17 +767,24 @@ def main() -> int:
         for f in overrides_dir.glob("*")
         if f.suffix.lower() in OVERRIDE_SUFFIXES and f.stem not in known
     )
+    gaps = [m for m in manifest if m["artwork"] == "monogram"]
+
     if orphans:
         print(
             f"\n{len(orphans)} override file(s) match no item in your library.\n"
             f"Renaming an item in Music Assistant changes its slug, so an "
-            f"override\nkeeps the old name and stops being used. Rename the "
-            f"file to match:"
+            f"override\nkeeps the old name and stops being used."
         )
+        renames = suggest_renames(orphans, gaps)
+        suggested = {old for old, _ in renames}
+        if renames:
+            print("\nThese look like renames. From " f"{overrides_dir}:")
+            for old, new in renames:
+                print(f"    mv {old} {new}")
         for name in orphans:
-            print(f"    {name}")
+            if name not in suggested:
+                print(f"    {name}  — matches nothing on a monogram")
 
-    gaps = [m for m in manifest if m["artwork"] == "monogram"]
     if gaps:
         print(
             f"\nTo replace a generated tile, drop an image in {overrides_dir}\n"
@@ -530,10 +801,14 @@ def main() -> int:
                 {
                     # The firmware is built for one tile size. If these disagree
                     # the artwork is the wrong shape and the device starts
-                    # reallocating buffers again, so the Home Assistant package
+                    # reallocating buffers again, so the Home Assistant side
                     # checks this before pushing any URL.
                     "tile_px": px,
                     "corner_radius": radius,
+                    "base_url": art.get("base_url"),
+                    "generated": datetime.datetime.now(datetime.UTC).isoformat(
+                        timespec="seconds"
+                    ),
                     "counts": counts,
                     "items": manifest,
                 },
@@ -544,6 +819,16 @@ def main() -> int:
         print(
             f"\nwrote {len(manifest)} tiles, manifest.json and index.html to {out_dir}"
         )
+
+    if unreachable:
+        # Non-zero so a scheduled run is visibly a failure rather than quietly
+        # producing a worse set of tiles than the run before it.
+        print(
+            f"\n{len(unreachable)} tile(s) could not be refetched from Music "
+            f"Assistant.\nExisting artwork was left alone. Run again when MA is "
+            f"reachable."
+        )
+        return 1
 
     return 0
 
