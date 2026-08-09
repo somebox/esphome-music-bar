@@ -242,6 +242,95 @@ def round_corners(img: Image.Image, radius: int, mat: tuple[int, int, int]):
     return base
 
 
+GALLERY_CSS = """
+:root { color-scheme: dark }
+body { margin:0; padding:28px 20px 60px; background:#121212; color:#e8e8e8;
+  font:15px/1.55 ui-sans-serif,-apple-system,Segoe UI,Roboto,sans-serif }
+.wrap { max-width:960px; margin:0 auto }
+h1 { font-size:21px; margin:0 0 4px } h2 { font-size:15px; margin:34px 0 10px;
+  text-transform:uppercase; letter-spacing:.09em; color:#8a8a8a; font-weight:600 }
+p { color:#b4b4b4; margin:0 0 14px } code { font-family:ui-monospace,Menlo,monospace;
+  background:#1e1e1e; padding:2px 6px; border-radius:5px; font-size:13px; color:#eee }
+ol { color:#b4b4b4; padding-left:20px } ol li { margin:7px 0 }
+.grid { display:grid; gap:16px; grid-template-columns:repeat(auto-fill,minmax(132px,1fr)) }
+.card { background:#1a1a1a; border-radius:10px; padding:12px; text-align:center }
+.card img { width:84px; height:84px; image-rendering:auto; border-radius:10px }
+.name { font-size:13px; margin:9px 0 5px; word-break:break-word; color:#e8e8e8 }
+.file { font-family:ui-monospace,Menlo,monospace; font-size:11px; color:#8a8a8a;
+  word-break:break-all; -webkit-user-select:all; user-select:all }
+.badge { display:inline-block; font-size:10px; letter-spacing:.06em; padding:2px 7px;
+  border-radius:20px; text-transform:uppercase; margin-bottom:6px }
+.gen { background:#4a3410; color:#ffb02e } .ma { background:#1e1e1e; color:#777 }
+.own { background:#123420; color:#4cd964 }
+.note { background:#1a1a1a; border-left:3px solid #0095ff; padding:12px 16px;
+  border-radius:0 8px 8px 0; margin:18px 0 }
+@media (prefers-color-scheme: light) {
+  body { background:#fff; color:#1a1a1a } .card,.note { background:#f4f4f5 }
+  code { background:#eee; color:#222 } p,ol,.file { color:#555 }
+}
+"""
+
+
+def write_gallery(out_dir: Path, manifest: list[dict], overrides_dir: Path, px: int):
+    """A page at the same URL the panel reads from, so a user who is looking at
+    a generated tile can find out what to name their replacement without
+    opening a terminal."""
+    gaps = [m for m in manifest if m["artwork"] == "monogram"]
+    badge = {
+        "monogram": ('gen', 'generated'),
+        "music_assistant": ('ma', 'Music Assistant'),
+        "override": ('own', 'your image'),
+    }
+
+    def esc(s):
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    def cards(rows):
+        return "\n".join(
+            f'<div class="card"><img src="{m["file"]}?v={m["v"]}" alt="" width="{px}" '
+            f'height="{px}"><div class="badge {badge[m["artwork"]][0]}">'
+            f'{badge[m["artwork"]][1]}</div><div class="name">{esc(m["name"])}</div>'
+            f'<div class="file">{m["slug"]}.png</div></div>'
+            for m in rows
+        )
+
+    gap_section = ""
+    if gaps:
+        gap_section = f"""
+<h2>{len(gaps)} without artwork</h2>
+<p>Music Assistant has no image for these, so the panel is showing initials.
+To replace one, save your image as the filename under its tile.</p>
+<div class="grid">{cards(gaps)}</div>"""
+
+    rest = [m for m in manifest if m["artwork"] != "monogram"]
+    rest_section = ""
+    if rest:
+        rest_section = f"""
+<h2>{len(rest)} with artwork</h2>
+<p>These came from Music Assistant, or from an image you supplied. Adding a
+file for any of them replaces what is here — yours always wins.</p>
+<div class="grid">{cards(rest)}</div>"""
+
+    html = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ma-bar artwork</title><style>{GALLERY_CSS}</style></head>
+<body><div class="wrap">
+<h1>ma-bar artwork</h1>
+<p>Every tile the panel can show, {px}&times;{px}. Tap a filename to select it.</p>
+<div class="note"><strong>To replace a tile</strong>
+<ol>
+<li>Save your image as the filename shown under it. Any size or shape,
+    <code>.png</code> <code>.jpg</code> <code>.webp</code> <code>.gif</code>.</li>
+<li>Put it in <code>{esc(str(overrides_dir))}</code></li>
+<li>Run the normalizer again, or press <em>Refresh artwork</em> in Home Assistant.</li>
+</ol>
+The panel updates on its next page turn. No reflash, no restart.</div>
+{gap_section}{rest_section}
+</div></body></html>"""
+    (out_dir / "index.html").write_text(html)
+
+
 def parse_color(value: str) -> tuple[int, int, int]:
     v = value.lstrip("#")
     return (int(v[0:2], 16), int(v[2:4], 16), int(v[4:6], 16))
@@ -408,6 +497,22 @@ def main() -> int:
         f"{counts['monogram']} generated"
     )
 
+    known = {m["slug"] for m in manifest}
+    orphans = sorted(
+        f.name
+        for f in overrides_dir.glob("*")
+        if f.suffix.lower() in OVERRIDE_SUFFIXES and f.stem not in known
+    )
+    if orphans:
+        print(
+            f"\n{len(orphans)} override file(s) match no item in your library.\n"
+            f"Renaming an item in Music Assistant changes its slug, so an "
+            f"override\nkeeps the old name and stops being used. Rename the "
+            f"file to match:"
+        )
+        for name in orphans:
+            print(f"    {name}")
+
     gaps = [m for m in manifest if m["artwork"] == "monogram"]
     if gaps:
         print(
@@ -420,8 +525,25 @@ def main() -> int:
             print(f"    ... and {len(gaps) - 10} more")
 
     if not args.report:
-        (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
-        print(f"\nwrote {len(manifest)} tiles + manifest.json to {out_dir}")
+        (out_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    # The firmware is built for one tile size. If these disagree
+                    # the artwork is the wrong shape and the device starts
+                    # reallocating buffers again, so the Home Assistant package
+                    # checks this before pushing any URL.
+                    "tile_px": px,
+                    "corner_radius": radius,
+                    "counts": counts,
+                    "items": manifest,
+                },
+                indent=2,
+            )
+        )
+        write_gallery(out_dir, manifest, overrides_dir, px)
+        print(
+            f"\nwrote {len(manifest)} tiles, manifest.json and index.html to {out_dir}"
+        )
 
     return 0
 

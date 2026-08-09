@@ -156,6 +156,43 @@ Three details the first run settled:
   swapped override would go unnoticed until reboot. With it, replacing an image
   and rerunning the normalizer is enough.
 
+### Keeping it current without anyone thinking about it
+
+Pages are built live from MA while artwork is pre-rendered, so the two can
+disagree. Three obligations fall on the Home Assistant package to close that:
+
+- **Trigger a run on an unknown slug.** A newly favorited item reaches a page
+  immediately and has no image yet. When the package builds a page containing a
+  slug absent from `manifest.json`, it runs the normalizer and the tile fills in
+  on the next turn.
+- **Re-probe gaps on a schedule.** The normalizer never caches "no artwork" —
+  every run refetches for any item without an override — so a station that
+  gains a logo upstream heals itself. Nothing else discovers that.
+- **Refuse mismatched artwork.** The manifest records the `tile_px` it rendered
+  at. If that disagrees with the size the firmware was built for, every image is
+  the wrong shape and the reallocation problem returns. The package compares
+  them and pushes names only, with a notification, rather than destabilising the
+  panel.
+
+It also needs a **Refresh artwork** button, since that is the affordance the
+gallery page tells users to press.
+
+One accepted limitation: renaming an item in MA changes its slug and orphans
+its override. The normalizer reports override files matching no item, and the
+gallery shows the item back on a monogram with the filename it now wants, so
+the failure is visible and the fix is a rename. Keying overrides on URI instead
+would survive renames but reintroduce exactly the instance-local IDs §3 exists
+to avoid.
+
+### No artwork is redistributed
+
+The repo ships none. `overrides/` is gitignored apart from its README, so a
+fork cannot publish logos by accident, and the normalizer's output directory is
+outside the repo. Artwork is fetched by the user, from their own MA instance,
+onto their own machine. Monograms are generated from the item name, and the
+only third-party asset in the build is the Material Design Icons webfont,
+pulled at compile time rather than vendored.
+
 Two placements, both viable:
 
 **Pre-rendered (recommended).** A script normalizes every item in the

@@ -43,8 +43,11 @@ ratio, transparent or not — the normalizer fits it to the tile, pads it onto
 the mat rather than cropping, flattens transparency and rounds the corners.
 Nothing unbounded ever reaches the panel, so a 4000px scan is fine to drop in.
 
-Because the slug comes from the item name, renaming something in Music
-Assistant carries its override along with it.
+Because the slug comes from the item name, **renaming an item in Music
+Assistant orphans its override** — the new name makes a new slug, and the old
+filename stops matching. The normalizer notices and tells you which files match
+nothing, so the fix is renaming the file to match. The gallery page will also
+show the item back on a monogram, with the filename it now wants.
 
 ## Changing one
 

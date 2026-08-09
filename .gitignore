@@ -13,4 +13,10 @@ ma-bar.config.yaml
 # Downloaded artwork cache
 .artwork-cache/
 
+# Your own artwork stays yours and stays local. Station logos and album art
+# are somebody else's copyright, so nothing under overrides/ is tracked —
+# a fork cannot accidentally publish them.
+overrides/*
+!overrides/README.md
+
 .DS_Store

@@ -48,6 +48,50 @@ Three pieces:
 - Home Assistant with the Music Assistant integration
 - ESPHome 2026.5 or newer (earlier versions rotate LVGL touch input incorrectly)
 
+## Artwork, and why some tiles show initials
+
+**This repo ships no artwork.** Station logos and album covers belong to the
+people who made them, so none are included and none are ever committed —
+everything under `overrides/` is gitignored, so a fork cannot publish them by
+accident. What you see on your panel is fetched by you, from your own Music
+Assistant, onto your own machine.
+
+Music Assistant does not have artwork for everything. For anything it lacks,
+the panel shows a monogram: the item's initials on a colour derived from its
+name. Deterministic, so an item keeps its colour, and distinct, so a page of
+them looks like a design rather than a row of identical failure icons.
+
+### Replacing one
+
+After the first normalizer run, open **`http://<your-ha>:8123/local/ma-bar/`**.
+It lists every tile the panel can show, initials-only ones first, each with the
+exact filename it wants.
+
+1. Save your image with that filename. Any size, any shape, transparent or not
+   — `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif` all work.
+2. Put it in the `overrides/` folder (or wherever `artwork.overrides_dir`
+   points).
+3. Run the normalizer again, or press **Refresh artwork** on your dashboard.
+
+The panel updates on its next page turn. No reflash, no restart. You never need
+to know a slug, an ID, or an image size — the page tells you the filename and
+the normalizer handles the rest.
+
+Prefer a terminal? `scripts/normalize-artwork.py --report` prints the same
+thing and writes nothing.
+
+### What happens when things change
+
+| You do this | What happens |
+|---|---|
+| **Update the firmware** | Nothing to redo. The panel stores no content — names, URIs and artwork URLs all arrive from Home Assistant at boot. Your overrides are on disk and untouched. |
+| **Change `tile_px` and reflash** | Every cached image is now the wrong size, which breaks the fixed-dimension rule the panel depends on. Rerun the normalizer. It records `tile_px` in the manifest and the Home Assistant package refuses to push mismatched artwork rather than letting the panel destabilise. |
+| **Favorite something new** | It appears on the next page turn — pages are built live from Music Assistant. Its artwork is generated on the next normalizer run, which Home Assistant triggers as soon as it sees an item it has no image for. |
+| **Unfavorite something** | It drops off the next page turn. Its image file is left behind harmlessly. |
+| **A station gains a logo it never had** | Picked up on the next normalizer run, which re-checks Music Assistant for anything still on a monogram rather than caching the absence. New artwork means a new fingerprint, a new URL, and the panel refetches on its next page turn. |
+| **You add an override for something that already had artwork** | Yours wins. The order is your file, then Music Assistant, then a monogram, and it is checked fresh every run. |
+| **You rename an item in Music Assistant** | The new name makes a new slug, so the old override filename stops matching and the tile falls back to a monogram. The normalizer lists override files that match nothing, and the gallery shows the filename now wanted — rename the file. |
+
 ## Prior art
 
 This is an extraction of `hifi-panel`, a working single-file config built in
