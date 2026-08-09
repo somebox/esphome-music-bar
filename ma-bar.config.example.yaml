@@ -31,6 +31,16 @@ artwork:
   # Padding and mat colour. Matching them makes the padding invisible.
   mat_color: "#1E1E1E"
 
+  # Most station logos are opaque with their own background, often white, so a
+  # grid of them against a dark UI reads as mismatched rectangles. A shared
+  # rounded edge makes them look like one set of cards. Set 0 for hard corners.
+  corner_radius: 10
+
+  # Shrinks artwork inside the tile. Only useful if your logos are transparent:
+  # on an opaque logo it insets the logo's own background too, which puts a
+  # sharp-cornered square inside the rounded card and undoes the rounding.
+  inset: 0
+
   # Size requested from Music Assistant's proxy before normalizing. It allows
   # 80/160/256/512 only and never upscales, so keep this above tile_px.
   proxy_size: 256

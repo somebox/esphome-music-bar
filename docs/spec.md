@@ -132,6 +132,30 @@ This placement earns its keep several times over:
 - Artwork from outside MA becomes possible at all. MA's proxy only accepts its
   own content hashes, so arbitrary third-party URLs have nowhere else to go.
 
+Implemented in `scripts/normalize-artwork.py`. **Proven** against the reference
+library: 20 items across two sections produced 20 files at one distinct
+`(84, 84) RGB`, 14 sourced from MA and 6 generated, 108KB on disk in total. A
+deliberately awkward override — 1400×520 with an alpha channel — came out at
+84×84 RGB like everything else.
+
+Three details the first run settled:
+
+- **Nothing is ever blank.** An item with no artwork anywhere gets a monogram:
+  its initials on a background whose hue is hashed from its name. Deterministic,
+  so an item keeps its colour between runs, and distinct, so a page of them
+  reads as a design rather than as five identical failure icons.
+- **Corners are rounded, to the mat colour.** Most logos turn out to be opaque
+  with backgrounds of their own — frequently white — so on a dark UI a grid of
+  raw squares reads as mismatched rectangles. A shared rounded edge makes them
+  one set of cards. Insetting the artwork instead does *not* work: on an opaque
+  logo it shrinks the logo's own background too, leaving a sharp-cornered square
+  floating inside the rounded card.
+- **Every tile is fingerprinted.** The manifest carries a short content hash per
+  item, and Home Assistant appends it to the URL. The device refetches only when
+  a URL changes, and a normalized filename never changes, so without the hash a
+  swapped override would go unnoticed until reboot. With it, replacing an image
+  and rerunning the normalizer is enough.
+
 Two placements, both viable:
 
 **Pre-rendered (recommended).** A script normalizes every item in the
