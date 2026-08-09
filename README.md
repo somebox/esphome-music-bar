@@ -14,24 +14,28 @@ Assistant can drive will work — the panel never talks to the player directly.
 Your favorites, and what the browser shows, are read at runtime. Changing them
 never means rebuilding or reflashing the panel.
 
-**Status: spec only.** The design is written down in
-[`docs/spec.md`](docs/spec.md); no configuration has been ported into this repo
-yet. It descends from a working private build, so the hard parts are known
-rather than guessed — see "Prior art" below.
+**Status: early.** The artwork normalizer is built and tested; the ESPHome
+config and the Home Assistant package are not written yet. It descends from a
+working private build, so the hard parts are known rather than guessed.
+
+- [`docs/spec.md`](docs/spec.md) — the design, and the constraints behind it
+- [`docs/plan.md`](docs/plan.md) — where this came from, what is next, and
+  which decisions are settled
 
 ## How it fits together
 
 Three pieces:
 
 - **The ESPHome config** on the panel. Fixed widgets, no content — it renders
-  whatever it is handed.
+  whatever it is handed. *Not written yet.*
 - **A Home Assistant package** that resolves item names against Music
   Assistant, and pushes a page of five items to the panel when it asks.
+  *Not written yet.*
 - **An artwork normalizer** that returns every image at identical dimensions,
   filling gaps from your own override folder. Not cosmetic: ESPHome
   reallocates an image buffer whenever the decoded dimensions change, and
   varying artwork sizes fragment PSRAM until the panel falls over.
-  [`docs/spec.md` §4](docs/spec.md#4-artwork) has the details.
+  [`docs/spec.md` §4](docs/spec.md#4-artwork) has the details. *Built.*
 
 ## Hardware
 
@@ -94,11 +98,13 @@ thing and writes nothing.
 
 ## Prior art
 
-This is an extraction of `hifi-panel`, a working single-file config built in
-August 2026 for a WiiM speaker. That build proved out album art decoding, LVGL
-rotation, touch hit-testing, build-time logo fetching and the Music Assistant
-image proxy's real behaviour. `docs/spec.md` carries those findings forward as
-constraints, and the parts of it marked *proven* were measured on hardware.
+An extraction of `hifi-panel`, a working single-file config built in August
+2026 for a WiiM speaker — though the speaker was incidental, since the panel
+only ever talks to Music Assistant. That build settled album art decoding, LVGL
+rotation, touch hit-testing and the image proxy's real behaviour;
+[`docs/spec.md`](docs/spec.md) carries those findings forward as constraints,
+and everything marked *proven* there was measured rather than assumed.
+[`docs/plan.md`](docs/plan.md) has the fuller story.
 
 ## License
 
