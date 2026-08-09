@@ -1,0 +1,440 @@
+# esphome-music-bar — shared base configuration.
+#
+# Everything the panel is, minus the parts that differ per device. Included as
+# a package from a small per-device YAML:
+#
+#   substitutions:
+#     name: music-bar-kitchen
+#     friendly_name: Kitchen Panel
+#   packages:
+#     music_bar: !include music-bar.base.yaml
+#
+# Or remotely:
+#
+#   packages:
+#     music_bar: github://somebox/esphome-music-bar/esphome/music-bar.base.yaml@main
+#
+# No secrets, and nothing to edit after adoption. A freshly flashed panel:
+#   - comes up as a Wi-Fi AP with a captive portal
+#   - accepts Wi-Fi credentials over USB-CDC (improv-serial) and BLE (esp32_improv)
+#   - is discovered by Home Assistant over the native API once on Wi-Fi
+#   - is handed a per-device Noise encryption key by Home Assistant at adoption
+#
+# Everything the panel *displays* arrives at runtime from Home Assistant, so
+# your Music Assistant player, your favorites and your artwork are never baked
+# into the firmware. See docs/spec.md section 7.
+
+substitutions:
+  name: music-bar
+  friendly_name: Music Panel
+  room: ""
+  device_description: "Music Assistant panel on a Waveshare ESP32-S3-Touch-LCD-3.49"
+  # ESPHome splits this on the dot into namespace and name, so the name itself
+  # cannot contain one — hence "Music Bar" rather than "esphome-music-bar".
+  project_name: "somebox.Music Bar"
+  project_version: "0.1.0-dev"
+
+  # Logging level: NONE, ERROR, WARN, INFO (default), DEBUG, VERBOSE, VERY_VERBOSE
+  log_level: "INFO"
+  # DNS suffix appended to the hostname, so the panel appears as
+  # music-bar-XXXXXX.local (or .iot.home.lan, etc.)
+  dns_domain: ".local"
+
+  # How long to wait for Home Assistant to answer the boot handshake before
+  # deciding it is not going to.
+  handshake_timeout: "10s"
+
+  # ── Device-specific, and set by the device profile ──────────────────────
+  #
+  # These belong to a panel, not to the project. devices/<profile>.yaml sets
+  # them and includes this file, so its values win. The defaults below exist
+  # only so this file validates on its own — change them in the profile, not
+  # here. See devices/waveshare-3.49.yaml.
+  device_profile: "none"
+  display_width: "640"
+  display_height: "172"
+  tile_px: "84"
+  imu_sda_pin: GPIO47
+  imu_scl_pin: GPIO48
+
+esphome:
+  name: "${name}"
+  friendly_name: "${friendly_name}"
+  comment: "${device_description}"
+  area: "${room}"
+  # Append the last 3 bytes of the MAC to the hostname so several unflashed
+  # panels do not collide on the network on first boot.
+  name_add_mac_suffix: true
+  # Pinned to what this is developed and tested against. The project tracks
+  # current ESPHome rather than carrying compatibility shims for older
+  # releases; 2026.5 was already the floor, because earlier versions place
+  # touches in the wrong place on a rotated display.
+  min_version: 2026.7.3
+  project:
+    name: "${project_name}"
+    version: "${project_version}"
+  includes:
+    - includes/music_bar_monogram.h
+    - includes/music_bar_util.h
+  on_boot:
+    priority: -100
+    then:
+      - script.execute: announce_setup_state
+
+# Waveshare ESP32-S3-Touch-LCD-3.49: 16MB flash, octal PSRAM. ESPHome needs a
+# board from its built-in list; the generic S3 devkit matches the SoC and the
+# pinout is board-specific via substitutions rather than devkit silkscreen.
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+# The framebuffer needs this. Octal at 80MHz is what the board carries.
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  id: logger_main
+  level: ${log_level}
+
+# Native Home Assistant API.
+#
+# No encryption key is baked into the firmware. The panel compiles with noise
+# support but no PSK; on first connect Home Assistant generates a per-device
+# key, sends it via the noise_encryption_set_key RPC, and the panel persists it
+# in flash. Plaintext is refused afterwards. Requires ESPHome >= 2025.10.0 and
+# Home Assistant with aioesphomeapi >= 2025.10.0.
+#
+# To pin a static key instead (offline or CI builds), set
+# `api: encryption: key: !secret music_bar_api_key` in a per-device YAML — see
+# secrets-example.yaml.
+api:
+  id: api_server
+  encryption:
+
+  # The contract with Home Assistant. Everything the panel shows arrives
+  # through these three actions; the panel holds no content of its own.
+  #
+  # Array arguments arrive as FixedVector<T> const& — a non-owning view into
+  # the receive buffer, which is reused as soon as the synchronous part of the
+  # handler returns. Every handler below copies immediately and stays
+  # synchronous. Adding a delay / wait_until / script.wait to one of these
+  # switches it to owning std::vector types and changes the contract; don't.
+  actions:
+    # Home Assistant answering the boot handshake. Until this arrives the panel
+    # assumes it is not set up yet.
+    - action: hello_ack
+      then:
+        - lambda: |-
+            id(ha_handshake_ok) = true;
+        - script.execute: announce_setup_state
+
+    # Now Playing. Pushed as flat fields rather than a media player entity
+    # because the useful values are scattered across Music Assistant's entity
+    # model, and that template logic belongs in Home Assistant.
+    - action: now_playing
+      variables:
+        title: string
+        artist: string
+        album: string
+        state: string
+        art_url: string
+      then:
+        - lambda: |-
+            id(np_title) = title;
+            id(np_artist) = artist;
+            id(np_album) = album;
+            id(np_state) = state;
+            // Music Assistant answers on two ports and Home Assistant
+            // alternates entity_picture between them, so identical artwork
+            // arrives as two different URLs seconds apart. Compare path and
+            // query only, and against what is actually on screen — ESPHome's
+            // online_image silently drops an update while a download is in
+            // flight, so a requested-URL variable can advance without anything
+            // having changed. (docs/spec.md section 6)
+            id(np_art_url) = music_bar::strip_origin(art_url);
+        # TODO(display): bind np_* to the LVGL widgets and point the now-playing
+        # image slot at art_url. Waits on the hifi-panel port.
+
+    # One browser page: five items, in order. Artwork URLs may be empty, in
+    # which case the panel draws its own monogram for that tile and no image
+    # slot is touched at all.
+    - action: page
+      variables:
+        page: int
+        total_pages: int
+        names: string[]
+        uris: string[]
+        art_urls: string[]
+      then:
+        - lambda: |-
+            id(page_index) = page;
+            id(page_total) = total_pages;
+            id(tile_names).assign(names.begin(), names.end());
+            id(tile_uris).assign(uris.begin(), uris.end());
+            id(tile_art_urls).assign(art_urls.begin(), art_urls.end());
+            ESP_LOGD("music_bar", "page %d/%d, %u items, %u with artwork",
+                     page + 1, total_pages, (unsigned) id(tile_names).size(),
+                     (unsigned) music_bar::count_non_empty(id(tile_art_urls)));
+        # TODO(display): write the five tile labels, set monogram colours from
+        # music_bar::monogram_bg_hex(), and point each image slot at its URL.
+
+ota:
+  - platform: esphome
+    id: ota_esphome
+
+# Wi-Fi: no SSID or password here on purpose.
+#   - First boot: the AP comes up and the captive portal serves a setup page.
+#   - improv-serial sets credentials over USB-CDC (the web-flasher path).
+#   - esp32_improv sets them over BLE (the Home Assistant path).
+# Once provisioned, credentials live in flash and the AP stays off.
+wifi:
+  id: wifi_component
+  ap: {}
+  domain: "${dns_domain}"
+  on_connect:
+    - script.execute: announce_setup_state
+    - script.execute: ha_handshake
+  on_disconnect:
+    - script.execute: announce_setup_state
+
+captive_portal:
+  id: captive_portal_main
+
+improv_serial:
+  id: improv_serial_main
+
+esp32_improv:
+  id: esp32_improv_main
+  authorizer: none
+
+mdns:
+  id: mdns_main
+  disabled: false
+
+# -- Setup state ------------------------------------------------------------
+# The panel has a screen, so it can say what is wrong with its own install
+# instead of looking broken.
+#
+# The trap this exists for: Home Assistant's per-device "Allow the device to
+# perform Home Assistant actions" toggle defaults OFF on recent releases, and
+# silently no-ops every call with nothing logged anywhere. Buttons visibly
+# react and nothing happens. The panel cannot read that setting, but it can
+# notice that nobody answered.
+
+globals:
+  - id: ha_handshake_ok
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  - id: ha_handshake_attempted
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
+  # Now Playing, as pushed by Home Assistant.
+  - id: np_title
+    type: std::string
+    restore_value: false
+  - id: np_artist
+    type: std::string
+    restore_value: false
+  - id: np_album
+    type: std::string
+    restore_value: false
+  - id: np_state
+    type: std::string
+    restore_value: false
+  - id: np_art_url
+    type: std::string
+    restore_value: false
+
+  # The current browser page.
+  - id: page_index
+    type: int
+    restore_value: false
+    initial_value: "0"
+  - id: page_total
+    type: int
+    restore_value: false
+    initial_value: "0"
+  - id: tile_names
+    type: std::vector<std::string>
+    restore_value: false
+  - id: tile_uris
+    type: std::vector<std::string>
+    restore_value: false
+  - id: tile_art_urls
+    type: std::vector<std::string>
+    restore_value: false
+
+script:
+  # Ask Home Assistant to prove it can call back. The blueprint answers by
+  # calling the hello_ack action above.
+  - id: ha_handshake
+    mode: restart
+    then:
+      - lambda: |-
+          id(ha_handshake_attempted) = true;
+      - homeassistant.action:
+          action: script.music_bar_hello
+          data:
+            device: "${name}"
+      - delay: ${handshake_timeout}
+      - script.execute: announce_setup_state
+
+  # One place that decides what the panel is currently telling the user.
+  - id: announce_setup_state
+    mode: restart
+    then:
+      - lambda: |-
+          std::string state;
+          if (!id(wifi_component).is_connected()) {
+            state = "Waiting for Wi-Fi";
+          } else if (id(ha_handshake_ok)) {
+            state = "Ready";
+          } else if (!id(ha_handshake_attempted)) {
+            state = "Connecting to Home Assistant";
+          } else {
+            // Nobody answered. Either the blueprint is not imported, or the
+            // per-device action toggle is off — and the second is by far the
+            // more common, so name it.
+            state = "Home Assistant did not answer. Settings > Devices & "
+                    "Services > ESPHome > this device > gear > enable 'Allow "
+                    "the device to perform Home Assistant actions', then "
+                    "import the music-bar blueprints.";
+          }
+          id(setup_state).publish_state(state);
+      # TODO(display): show this on the setup screen and switch to Now Playing
+      # once the state is Ready.
+
+# -- Buses ------------------------------------------------------------------
+# The IMU's own bus. The display and touch controller share a QSPI bus that
+# lands with the display config.
+i2c:
+  - id: i2c_imu
+    sda: ${imu_sda_pin}
+    scl: ${imu_scl_pin}
+    scan: false
+
+# -- Diagnostics ------------------------------------------------------------
+binary_sensor:
+  - platform: status
+    name: "Status"
+    id: status_sensor
+    entity_category: diagnostic
+
+sensor:
+  - platform: internal_temperature
+    name: "Internal Temperature"
+    id: chip_temperature
+    entity_category: diagnostic
+    disabled_by_default: true
+
+  - platform: uptime
+    name: "Uptime"
+    id: uptime_sensor
+    entity_category: diagnostic
+    disabled_by_default: true
+
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    id: wifi_signal_db
+    update_interval: 60s
+    entity_category: diagnostic
+    disabled_by_default: true
+
+text_sensor:
+  # What the panel is currently telling the user, mirrored into Home Assistant
+  # so the same diagnosis is available without walking over to look at it.
+  - platform: template
+    name: "Setup Status"
+    id: setup_state
+    entity_category: diagnostic
+    update_interval: never
+
+  # The size this firmware's image slots are built for. The artwork side
+  # compares this against the manifest and refuses to push mismatched images.
+  - platform: template
+    name: "Tile Size"
+    id: tile_size
+    entity_category: diagnostic
+    disabled_by_default: true
+    update_interval: never
+    lambda: 'return {"${tile_px}"};'
+
+  # Which panel this firmware was built for. Worth reporting because the
+  # project supports one device today and expects to support more.
+  - platform: template
+    name: "Device Profile"
+    id: device_profile_sensor
+    entity_category: diagnostic
+    disabled_by_default: true
+    update_interval: never
+    lambda: 'return {"${device_profile}"};'
+
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      id: wifi_ip_address
+      entity_category: diagnostic
+      disabled_by_default: true
+    ssid:
+      name: "Connected SSID"
+      id: wifi_ssid
+      entity_category: diagnostic
+      disabled_by_default: true
+    mac_address:
+      name: "MAC Address"
+      id: wifi_mac_address
+      entity_category: diagnostic
+      disabled_by_default: true
+
+  - platform: version
+    name: "ESPHome Version"
+    id: esphome_version
+    entity_category: diagnostic
+    disabled_by_default: true
+
+# -- Recovery ---------------------------------------------------------------
+button:
+  - platform: restart
+    name: "Restart"
+    id: restart_button
+    entity_category: config
+  - platform: safe_mode
+    name: "Safe Mode"
+    id: safe_mode_button
+    entity_category: config
+  - platform: factory_reset
+    name: "Factory Reset"
+    id: factory_reset_button
+    entity_category: config
+
+  # Re-runs the boot handshake without a reboot, for when someone has just
+  # flipped the actions toggle and wants to know whether it worked.
+  - platform: template
+    name: "Retry Home Assistant Handshake"
+    id: retry_handshake_button
+    entity_category: config
+    on_press:
+      - script.execute: ha_handshake
+
+# -- Optional ---------------------------------------------------------------
+# Local web UI at http://<device>.local. Off by default: Home Assistant is the
+# interface, and this costs RAM that the framebuffer wants. Unauthenticated on
+# a trusted LAN unless you add `auth:`.
+#
+# web_server:
+#   id: web_server_main
+#   port: 80
+
+# -- Display ----------------------------------------------------------------
+# TODO: AXS15231B QSPI display + touch, LVGL layout, five browser tiles and six
+# image slots. Ported from the hifi-panel build, which is on the ESPHome host —
+# retrieve it before starting rather than reconstructing the QSPI init sequence
+# from scratch. Until then this config builds, provisions, adopts and reports
+# its own setup state, which is what the blueprints and the artwork side are
+# developed against.

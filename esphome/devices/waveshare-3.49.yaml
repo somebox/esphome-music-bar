@@ -1,0 +1,58 @@
+# Device profile — Waveshare ESP32-S3-Touch-LCD-3.49.
+#
+# Everything that is true of this panel and not of the next one: the SoC and
+# memory, the pin map, the screen geometry, and the tile size that follows from
+# it. The generic half lives in music-bar.base.yaml, which this includes.
+#
+# The chain is: <build config> -> devices/<profile>.yaml -> music-bar.base.yaml
+#
+# Substitutions here override the base's defaults, because a package's
+# substitutions lose to those of the config including it. That is the whole
+# mechanism — no conditionals, no per-device branching in the base.
+#
+# ── Adding another device ──────────────────────────────────────────────────
+#
+# Copy this file, change the pins, geometry and tile size, and add a build
+# config that includes it. Nothing in the base, the blueprints or the artwork
+# normalizer should need a change; if it does, that is a sign something
+# device-specific leaked out of this file. Issues requesting a device, and pull
+# requests adding one, are both welcome.
+#
+# Today this is the only profile, and the project is deliberately opinionated
+# about it: fixed sizes, one layout, no runtime geometry negotiation.
+
+substitutions:
+  device_profile: "waveshare-3.49"
+
+  # Screen. 172x640 native portrait, driven rotated 90 degrees as a 640x172
+  # landscape bar. The AXS15231B drives display and touch from one chip over
+  # QSPI, so the pin map and init sequence are inseparable from this board.
+  display_width: "640"
+  display_height: "172"
+
+  # Artwork tile size, in pixels.
+  #
+  # A property of *this* panel, not of the project. It follows from the layout:
+  # five tiles across 640px with room for a two-line name beneath each. The
+  # five browser image slots allocate a buffer of exactly this size once and
+  # reuse it forever, which is only safe while every image reaching them is
+  # exactly this big — see docs/spec.md section 4.
+  #
+  # The panel reports it to Home Assistant (the Tile Size sensor in the base)
+  # so the artwork side can refuse to push images rendered at another size.
+  # Change it here, reflash, and rerun the normalizer with --force.
+  tile_px: "84"
+
+  # The QMI8658 IMU sits on its own I2C bus, which is why an I2C scan of the
+  # touch bus never finds it.
+  imu_sda_pin: GPIO47
+  imu_scl_pin: GPIO48
+
+packages:
+  music_bar: !include ../music-bar.base.yaml
+
+# -- Display and touch ------------------------------------------------------
+# TODO: AXS15231B QSPI display + touchscreen, and the LVGL layout built on it.
+# Ported from the hifi-panel build on the ESPHome host. This is the only part of
+# the project that is genuinely board-specific and not yet written; see
+# docs/plan.md phase 1.

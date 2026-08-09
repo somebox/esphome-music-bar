@@ -1,0 +1,25 @@
+# esphome-music-bar — per-device config.
+#
+# Copy this once per panel if you want a fixed name baked in rather than a
+# MAC-suffixed one. Wi-Fi still comes from Improv and the API key is still
+# negotiated by Home Assistant at adoption, so this needs no secrets.yaml.
+#
+#   cp music-bar.example.yaml music-bar-kitchen.yaml
+#   esphome run music-bar-kitchen.yaml
+#
+# For the generic factory image (MAC-suffixed name, web-flasher ready), build
+# music-bar.factory.factory.yaml instead.
+
+substitutions:
+  name: music-bar-kitchen
+  friendly_name: Kitchen Panel
+  room: ""
+
+packages:
+  device: !include devices/waveshare-3.49.yaml
+
+# Named per-device builds do not append the MAC suffix. The base sets it so
+# several unflashed panels do not collide on first boot; once you have chosen a
+# name there is nothing to collide with.
+esphome:
+  name_add_mac_suffix: false

@@ -1,0 +1,35 @@
+# esphome-music-bar — factory firmware, and the Device Builder import target.
+#
+# This is the config the ESPHome Device Builder imports when a user clicks
+# "Take Control / Adopt" on a discovered panel. It is also the base for the
+# bench-flash image (music-bar.factory.factory.yaml).
+#
+# No secrets are baked in. Wi-Fi is provisioned over Improv (BLE or USB-CDC),
+# and the native API starts with no key — Home Assistant negotiates and
+# persists a per-device Noise PSK at adoption. Nothing needs editing afterwards:
+# your player, your favorites and your artwork all reach the panel at runtime.
+
+substitutions:
+  name: music-bar
+  friendly_name: Music Panel
+
+packages:
+  device: !include devices/waveshare-3.49.yaml
+
+# Where the Device Builder imports from when adopting a discovered panel.
+# Deliberately not in the base, so dev and example builds that include the base
+# do not advertise a re-import that would strip their local changes.
+#
+# import_full_config is false on purpose. With it true the Device Builder
+# copies this file's *text* into the user's config, and the `!include` above
+# would then point at a file they do not have. Left false, the adopted config
+# references this file as a remote package instead; ESPHome clones the repo to
+# resolve it, so the include resolves too. Made for ESPHome permits remote
+# packages in an adopted config.
+#
+# The trade is that an adopted panel gets a thin config tracking this repo
+# rather than an inlined copy to edit. Anyone wanting to change the LVGL layout
+# clones the repo and builds music-bar.example.yaml instead — see the README.
+dashboard_import:
+  package_import_url: github://somebox/esphome-music-bar/esphome/music-bar.factory.yaml@main
+  import_full_config: false

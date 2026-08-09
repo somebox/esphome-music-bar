@@ -1,0 +1,146 @@
+# PSRAM probe — docs/plan.md phase 1, docs/spec.md section 10.
+#
+# ┌───────────────────────────────────────────────────────────────────────────┐
+# │ THIS CONFIG DOES NOT VALIDATE YET, AND IS EXCLUDED FROM `make smoke-test`.│
+# │                                                                           │
+# │ `online_image` is a display-domain component and ESPHome refuses it        │
+# │ without a `display:`, so the probe cannot be built before the AXS15231B    │
+# │ display config lands. That turned out to settle a scheduling question:     │
+# │ phase 1 cannot precede the display port after all. Retrieve hifi-panel     │
+# │ from the ESPHome host, bring up the display, then run this.                │
+# │                                                                           │
+# │ Everything below is written and reviewed; it needs a `display:` block and  │
+# │ a line added to ALL_CONFIGS in the Makefile.                              │
+# └───────────────────────────────────────────────────────────────────────────┘
+#
+# The riskiest unknown in the whole design: whether six concurrent runtime
+# image slots can turn over on every page turn without fragmenting PSRAM.
+# ESPHome frees and reallocates an image's buffer whenever the decoded
+# dimensions change, and its failure message reports the largest free block
+# rather than the free total — the failure mode is fragmentation, not
+# exhaustion.
+#
+# This needs no Home Assistant package and no browser logic, because the
+# normalizer already produces static files at fixed URLs. Point artwork_base at
+# a normalizer output directory, flash, then press "Cycle Tiles" thirty times
+# and watch **Largest Free Block**, not free heap. If the block figure holds
+# steady, the live browser design is safe.
+#
+#   make probe
+#
+# Incomplete on purpose: the framebuffer is the other half of the memory
+# budget and lands with the display config. Re-run this probe after the display
+# is in, because six slots being affordable on their own does not mean they are
+# affordable alongside it. BLE is compiled in here too (the base carries
+# esp32_improv), which is part of what is being measured.
+
+substitutions:
+  name: music-bar-probe
+  friendly_name: Panel Probe
+
+  # A normalizer output directory. Any five tiles plus one for now-playing.
+  artwork_base: "http://homeassistant.local:8123/local/music-bar"
+
+packages:
+  device: !include devices/waveshare-3.49.yaml
+
+esphome:
+  name_add_mac_suffix: false
+
+http_request:
+  id: http_request_main
+  timeout: 10s
+
+# Six slots: five browser tiles and the now-playing thumbnail.
+#
+# No `resize:` on purpose. It would not help — with both dimensions given it
+# computes one uniform scale factor and preserves aspect ratio, so the buffer
+# takes the source's shape rather than a square. The normalizer is what
+# guarantees the dimensions; this probe exists to confirm that guarantee is
+# enough.
+online_image:
+  - id: slot_0
+    url: "${artwork_base}/placeholder.png"
+    format: PNG
+    type: RGB565
+    on_download_finished:
+      - lambda: 'ESP_LOGI("probe", "slot 0 finished");'
+  - id: slot_1
+    url: "${artwork_base}/placeholder.png"
+    format: PNG
+    type: RGB565
+    on_download_finished:
+      - lambda: 'ESP_LOGI("probe", "slot 1 finished");'
+  - id: slot_2
+    url: "${artwork_base}/placeholder.png"
+    format: PNG
+    type: RGB565
+    on_download_finished:
+      - lambda: 'ESP_LOGI("probe", "slot 2 finished");'
+  - id: slot_3
+    url: "${artwork_base}/placeholder.png"
+    format: PNG
+    type: RGB565
+    on_download_finished:
+      - lambda: 'ESP_LOGI("probe", "slot 3 finished");'
+  - id: slot_4
+    url: "${artwork_base}/placeholder.png"
+    format: PNG
+    type: RGB565
+    on_download_finished:
+      - lambda: 'ESP_LOGI("probe", "slot 4 finished");'
+  - id: slot_np
+    url: "${artwork_base}/placeholder.png"
+    format: PNG
+    type: RGB565
+    on_download_finished:
+      - lambda: 'ESP_LOGI("probe", "now-playing slot finished");'
+
+globals:
+  - id: probe_round
+    type: int
+    restore_value: false
+    initial_value: "0"
+  # Fill with the slugs of tiles in your own normalizer output. Two rounds of
+  # six is enough to force a full turnover on every press.
+  - id: probe_slugs
+    type: std::vector<std::string>
+    restore_value: false
+    initial_value: '{"a","b","c","d","e","f","g","h","i","j","k","l"}'
+
+button:
+  - platform: template
+    name: "Cycle Tiles"
+    id: cycle_tiles_button
+    on_press:
+      - lambda: |-
+          auto &slugs = id(probe_slugs);
+          if (slugs.empty()) return;
+          const int round = id(probe_round)++;
+          online_image::OnlineImage *slots[] = {
+              id(slot_0), id(slot_1), id(slot_2),
+              id(slot_3), id(slot_4), id(slot_np)};
+          for (int i = 0; i < 6; i++) {
+            const std::string &slug = slugs[(round * 6 + i) % slugs.size()];
+            slots[i]->set_url("${artwork_base}/" + slug + ".png");
+          }
+          ESP_LOGI("probe", "round %d requested", round);
+
+# Largest Free Block is the number that matters. Free heap can look healthy
+# while the largest allocatable block shrinks toward the size of one tile
+# buffer, and that is the failure this design has to avoid.
+debug:
+  id: debug_component
+  update_interval: 15s
+
+sensor:
+  - platform: debug
+    free:
+      name: "Free Heap"
+      id: debug_free_heap
+    block:
+      name: "Largest Free Block"
+      id: debug_largest_block
+    loop_time:
+      name: "Loop Time"
+      id: debug_loop_time

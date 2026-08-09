@@ -1,0 +1,26 @@
+# esphome-music-bar — factory flash image (bench flash / web flasher).
+#
+# The entry point for a cable flash or ESP Web Tools. Identical to
+# music-bar.factory.yaml for now; HTTP self-update stays disabled until a release
+# publishes a real manifest.json and firmware.ota.bin, since pointing at an
+# unpublished URL only produces boot-time 404 noise. ESPHome OTA from Home
+# Assistant works either way via the base's `ota:` block.
+#
+# Users and the Device Builder should import music-bar.factory.yaml, not this file.
+
+packages:
+  factory: !include music-bar.factory.yaml
+
+# --- HTTP OTA / self-update (re-enable when a release hosts these) ---------
+# ota:
+#   - platform: http_request
+#     id: ota_http_request
+#
+# update:
+#   - platform: http_request
+#     id: update_http_request
+#     name: Firmware
+#     source: https://raw.githubusercontent.com/somebox/esphome-music-bar/main/esphome/manifest.json
+#
+# http_request:
+#   id: http_request_main

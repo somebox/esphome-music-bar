@@ -1,0 +1,3 @@
+# Tracks current ESPHome rather than carrying shims for older releases.
+# Developed and tested against 2026.7.3.
+esphome>=2026.7.3,<2027.0.0
