@@ -1,4 +1,4 @@
-# ma-bar-3.49 — design spec
+# esphome-music-bar — design spec
 
 What the panel is, what it depends on, and the decisions that shape it. Claims
 marked **proven** were measured on hardware, probed against a live Music
@@ -8,29 +8,58 @@ Claims marked **unverified** have a named probe in
 
 ## 1. Scope
 
-A 640×172 touch bar showing Music Assistant's current playback, with transport
-controls and a paged browser for library items. Two hard dependencies, and the
-project is deliberately not abstracted away from either:
+**A quick way to put one of your favorites on a speaker.** A 640×172 touch bar
+that shows what is playing and lets you pick something else in one tap. That is
+the whole product, and the constraints below follow from taking it literally:
 
-**The board.** Waveshare ESP32-S3-Touch-LCD-3.49. The AXS15231B drives display
-and touch from one chip over QSPI; the pin map, the QSPI init sequence and the
-172×640 native geometry are all board-specific. The QMI8658 IMU sits on a
-*second* I²C bus at GPIO47/48, which is why an I²C scan of the touch bus never
-finds it. 16MB flash, octal PSRAM at 80MHz — the framebuffer needs it.
+- **Favorites are the content.** Not the library, not a search, not a curated
+  list maintained in a config file. What you have marked favorite in Music
+  Assistant is what the panel offers.
+- **Prev and next move between favorites, not between tracks.** The bar is a
+  station selector, not a transport for the current album. §2 covers what that
+  leaves for the other buttons.
+- **One configured playback device**, chosen by the user, changeable at
+  runtime. The panel never addresses a speaker directly, so anything Music
+  Assistant can drive works unchanged.
+- **A playlist resumes where you left it.** Starting a playlist favorite a
+  second time continues after the last track you heard rather than restarting.
+  §5 covers where that state lives, and why it is not free.
 
-**Music Assistant.** The panel uses MA's library API for the item list, MA's
-image proxy for artwork, and `music_assistant.play_media` for playback. It
-never addresses a speaker directly, so any player MA supports works unchanged.
+Two hard dependencies, and the project is deliberately not abstracted away from
+either:
+
+**The panel.** One device today: the Waveshare ESP32-S3-Touch-LCD-3.49. The
+AXS15231B drives display and touch from one chip over QSPI; the pin map, the
+QSPI init sequence and the 172×640 native geometry are all board-specific. The
+QMI8658 IMU sits on a *second* I²C bus at GPIO47/48, which is why an I²C scan of
+the touch bus never finds it. 16MB flash, octal PSRAM at 80MHz — the framebuffer
+needs it.
+
+Everything board-specific is confined to `esphome/devices/waveshare-3.49.yaml`:
+pins, geometry, and the tile size that follows from the layout. A second device
+is a second profile, not a refactor. That is as far as the generalisation goes
+on purpose — there is no runtime geometry negotiation and no per-device
+branching, because one real device with fixed sizes is worth more than an
+abstraction validated against nothing. Issues asking for a device, and pull
+requests adding one, are both welcome.
+
+**Music Assistant.** The panel uses MA's library API for the favorites list,
+MA's image proxy for artwork, and `play_media` for playback.
+
+Both dependencies track current releases. The project does not carry
+compatibility shims for older ESPHome or Music Assistant versions; where a
+recent version does something usefully better, the floor moves.
 
 Everything the panel displays arrives at runtime. Changing your favorites, or
 what the browser shows, never requires a rebuild or a reflash — see
 [§7](#7-runtime-architecture). This is the central design goal and it
 constrains most of what follows.
 
-Three pieces make that work: the ESPHome config on the device, a Home Assistant
-package that resolves items and pushes pages, and a small artwork normalizer
-that guarantees every image arrives at identical dimensions. [§4](#4-artwork)
-explains why the third one is not optional.
+Three layers make that work: the ESPHome config on the device, Home Assistant
+blueprints that resolve items and push pages, and an artwork normalizer that
+guarantees every image arrives at identical dimensions. Only the first two are
+required — [§4](#4-artwork) explains what the third buys and when its
+constraint applies.
 
 ## 2. Screen layout
 
@@ -40,6 +69,32 @@ The bar is short and wide, which drives the whole UI. Two kinds of page:
 (album or station / artist / track, each scrolling when too long), a row of
 icon transport buttons, and a full-height strip down the right edge that opens
 the browser.
+
+### What the transport buttons do
+
+Prev and next move between **favorites**, not between tracks. That is the
+deliberate part, and it is what makes the bar a station selector rather than a
+second remote control for whatever is already playing — reaching the next
+favorite is one tap, not a trip through the browser.
+
+| Button | Action |
+|---|---|
+| Prev / Next | The previous or next favorite in the list, started immediately |
+| Play / Pause | Pause and resume the configured player |
+| Browser strip | Opens the browser |
+
+Consequences worth stating rather than discovering:
+
+- The panel is never the way to skip a track inside an album or playlist. That
+  is what the phone or the speaker's own controls are for, and trying to serve
+  both from four icons on a 172px-tall bar serves neither.
+- Prev/next need a position in the favorites list. The device does not maintain
+  one — it asks Home Assistant to move, and Home Assistant works out from what
+  is playing where "next" lands. Keeping that in one place avoids the panel and
+  Home Assistant disagreeing after playback is started from somewhere else.
+- Playing something from the browser sets that position too, so next after a
+  browser pick continues from the pick rather than from wherever the panel had
+  got to.
 
 **Browser** — a page of five tiles across, each an artwork square on a mat with
 the item name beneath, plus chevron edge buttons to page through. Tapping a
@@ -68,16 +123,44 @@ Names are the thing the user typed, the thing on screen, and the thing that
 survives both. Resolution to a URI happens in Home Assistant at the moment a
 page is built, so a rebuilt library corrects itself on the next page turn.
 
+Upstream agrees, and for a sharper reason than the one above. MA's library
+database **keys radio stations off the stream URL**, so correcting a URL is not
+an edit — it is a delete and re-add, and the `library://radio/N` changes.
+Broadcasters rotate stream URLs routinely (the BBC is the running example in
+[discussion #3279](https://github.com/orgs/music-assistant/discussions/3279)),
+which makes this a normal maintenance action rather than a rare event. Asked
+what a user should key automations on, the maintainer's answer is that they
+should not have used the library URI at all. So the ID churn §3 is built around
+is caused by ordinary use, not only by library rebuilds.
+
 **Proven**: MA's `music/search` command resolves `"WKCR"` → `library://radio/17`.
 Home Assistant exposes the same thing as `music_assistant.search`, a response
 service taking `name` and `media_type`.
 
-Two consequences to handle:
+Two details about that search, both **proven** against the live instance and
+both easy to get wrong:
+
+- **Search results are keyed plural, except radio.** `music/search` returns
+  `artists`, `albums`, `genres`, `tracks`, `playlists`, `radio`, `audiobooks`,
+  `podcasts`, `sound_effects`. Reading the singular `media_type` back out of the
+  response finds nothing for every type but radio, silently.
+- **`library_only: true` is what returns library URIs.** Without it MA also
+  searches every streaming provider and a provider hit can outrank the library
+  item — `"Kind of Blue"` comes back as `spotify--…://album/…` rather than
+  `library://album/N`. The normalizer searches the library first and only
+  widens if that finds nothing, so a `list` section can still name something
+  not yet in the library.
+
+Three consequences to handle:
 
 - Names must be unique within a media type. A config entry may carry an
   explicit `uri:` that overrides lookup, as the tiebreak for a genuine clash.
 - A name that resolves to nothing renders as a tile marked unresolved rather
   than vanishing. A silently missing tile is a gap the user has to notice.
+- Slugs, unlike names, share one namespace across media types, because a slug
+  is a filename. A station and an album both called "Blue" collide; the second
+  gets a suffixed filename and the run says so, rather than one tile silently
+  disappearing.
 
 ## 4. Artwork
 
@@ -105,6 +188,41 @@ design and retreat to build-time logos in flash.
 The fix is to stop the dimensions from varying. If every URL returns exactly
 the tile size, each slot allocates its buffer once on first use and reuses it
 forever — no frees, no fragmentation, and the whole live design becomes safe.
+
+### When this constraint applies at all
+
+Only when artwork is configured. The panel draws its own monogram for any tile
+it has no URL for, as an LVGL label on a coloured object — no image slot, no
+buffer, no fetch. An install with no artwork configured hands its five browser
+slots nothing, so there is nothing to reallocate and none of the above is
+reachable.
+
+That makes artwork an upgrade rather than a prerequisite, and it means the
+browser can be built and proven before an image slot is ever used. The colour is
+a hash of the item name, computed identically on both sides
+(`esphome/includes/music_bar_monogram.h` and `fnv1a()` in the normalizer) so a tile
+the panel draws and a tile the normalizer renders look the same; a test compiles
+the header and diffs it against the Python.
+
+The Now Playing thumbnail is a different risk from the five browser slots: one
+buffer changing at track-change rate rather than five turning over on every page
+turn. The prior build ran live Music Assistant artwork there and survived, which
+is why tier 2 in the README offers it without a normalizer — but that is
+inference from a build that also had far fewer slots, and it is folded into the
+phase-1 probe rather than assumed.
+
+### The contract, and what it is not
+
+The interface between the panel and the artwork layer is *a folder of N×N PNGs
+named by slug*. The normalizer is one way to fill that folder; a user dropping
+84×84 squares into `/config/www/music-bar/` by hand is another, and needs no
+software at all.
+
+Nothing in the normalizer is specific to this panel beyond `tile_px` and
+`mat_color` — "any image URL, returned at exactly N×N, flattened" is a
+constraint every ESPHome device with runtime images has. It ships here as an
+optional Home Assistant integration and a standalone script, and could
+reasonably be extracted.
 
 ### The normalizer
 
@@ -159,30 +277,84 @@ Three details the first run settled:
 ### Keeping it current without anyone thinking about it
 
 Pages are built live from MA while artwork is pre-rendered, so the two can
-disagree. Three obligations fall on the Home Assistant package to close that:
+disagree. Three obligations fall on the Home Assistant side to close that:
 
 - **Trigger a run on an unknown slug.** A newly favorited item reaches a page
-  immediately and has no image yet. When the package builds a page containing a
-  slug absent from `manifest.json`, it runs the normalizer and the tile fills in
-  on the next turn.
+  immediately and has no image yet. When a page contains a slug absent from
+  `manifest.json`, the integration runs the normalizer and the tile fills in on
+  the next turn. Until it does, that tile is a monogram rather than a gap.
 - **Re-probe gaps on a schedule.** The normalizer never caches "no artwork" —
   every run refetches for any item without an override — so a station that
   gains a logo upstream heals itself. Nothing else discovers that.
 - **Refuse mismatched artwork.** The manifest records the `tile_px` it rendered
-  at. If that disagrees with the size the firmware was built for, every image is
-  the wrong shape and the reallocation problem returns. The package compares
-  them and pushes names only, with a notification, rather than destabilising the
-  panel.
+  at, and the panel publishes the size its image slots were built for as a
+  diagnostic sensor. If those disagree, every image is the wrong shape and the
+  reallocation problem returns; the integration pushes names only, with a
+  notification, rather than destabilising the panel.
 
 It also needs a **Refresh artwork** button, since that is the affordance the
 gallery page tells users to press.
 
-One accepted limitation: renaming an item in MA changes its slug and orphans
-its override. The normalizer reports override files matching no item, and the
-gallery shows the item back on a monogram with the filename it now wants, so
-the failure is visible and the fix is a rename. Keying overrides on URI instead
-would survive renames but reintroduce exactly the instance-local IDs §3 exists
-to avoid.
+### What MA's own image editing does and does not cover
+
+MA 2.9.0 added editing of the name and image of **manually added** stations,
+tracks and playlists ([discussion #3279](https://github.com/orgs/music-assistant/discussions/3279)).
+It does not make the override folder redundant, and it is worth being precise
+about why.
+
+**Proven** against the reference instance running 2.10.0b12: all 15 radios come
+from `radiobrowser`, so the number the feature can fix there is **zero** — and
+the five with no artwork are exactly the ones it cannot touch. Provider-sourced
+items are not editable; only stations a user added by stream URL are. The two
+mechanisms therefore cover different populations rather than competing:
+MA-side images for manually added stations, overrides for everything from a
+provider.
+
+Where it does apply it composes cleanly. **Proven** on the reference instance,
+after adding four stations manually with image URLs: each gets a `thumb` with
+`provider: builtin`, `remotely_accessible: true`, the supplied URL as `path`,
+**and a `proxy_id`**. All four fetch 200 through `?size=256&fmt=png`. So a user
+who sets an image in MA needs no override at all — the normalizer picks it up
+like any other artwork, and four stations that had been showing monograms
+(WKCR, France Musique, Radio 3FACH, Rádio Amália) filled in on the next run.
+
+It does not, however, remove the reason for normalizing — and the same
+experiment shows why. Those four images came back at:
+
+| Station | Size from MA's proxy |
+|---|---|
+| France Musique | 256×256 |
+| Rádio Amália | 256×144 |
+| WKCR | 256×138 |
+| Radio 3FACH | 164×72 |
+
+Four hand-curated images, four different buffer shapes, because the proxy
+preserves aspect ratio and never upscales — Radio 3FACH's logo is small at
+source, so `size=256` returns 164×72. Fixing artwork in MA fixes *coverage*, not
+*dimensions*, and it is dimensions that the device's image slots care about. The
+normalizer flattened all sixteen tiles to one `(84, 84)`.
+
+A second thing that run showed: TSF Jazz has an artwork `path` and still came
+back on a monogram, because the proxy did not return an image for it. Only a
+real fetch settles whether artwork exists — which is exactly why that test lives
+here and not on the device.
+
+### Renames, and why the key stays the name
+
+Renaming an item in MA changes its slug and orphans its override. This is the
+one accepted limitation, and 2.9.0 made it more likely by turning renaming into
+a supported operation users are invited to perform.
+
+It stays accepted, because the same discussion establishes there is no stabler
+key on offer: library URIs move whenever a stream URL is corrected, and the
+provider IDs beneath them change upstream. Keying overrides on a URI would
+trade a visible, self-announcing failure for a silent one.
+
+What changed instead is the healing. The normalizer already reported override
+files matching no item; it now pairs them against items that have fallen back
+to a monogram and prints the `mv` that repairs it. Near-misses only — an orphan
+resembling nothing is listed rather than guessed at, because a confident wrong
+suggestion is worse than none.
 
 ### No artwork is redistributed
 
@@ -197,7 +369,7 @@ Two placements, both viable:
 
 **Pre-rendered (recommended).** A script normalizes every item in the
 configured sections into a directory Home Assistant already serves —
-`<ha-config>/www/ma-bar/` at `http://<ha>:8123/local/ma-bar/`. It reruns on a
+`<ha-config>/www/music-bar/` at `http://<ha>:8123/local/music-bar/`. It reruns on a
 timer or when the library changes. The device fetches plain static files, there
 is no service to keep alive, and page turns never wait on a resize.
 
@@ -252,25 +424,69 @@ a radio station.
 That `pagination` argument matters: it means a page turn is one service call
 for five items, not a full library fetch that Home Assistant then slices.
 
-The catch is that "favorites" is only as useful as the user's tagging. On the
-reference instance:
+**Favorites are the whole content model.** Across the media types the user
+cares about, concatenated into one list that the browser pages through and that
+prev/next steps along. There is no `all`, no capped library dump, and no
+curated list maintained in a config file.
+
+That is a narrowing from an earlier design, and it is worth being clear that it
+has a cost. Favorites are only as useful as the user's tagging, and on the
+reference instance the tagging is thin — **measured**, not estimated:
 
 | Type | In library | Marked favorite |
 |---|---|---|
-| Radios | 15 | 1 |
+| Radios | 16 | **0** |
 | Playlists | 101 | 5 |
 | Albums | 419 | 0 |
 | Artists | 469 | 0 |
-| Tracks | 500 | 0 |
+| Tracks | 2000+ | 0 |
 
-A panel hardwired to `favorite: true` would show one station there. So the
-source is configurable per section, and a config is a list of sections:
+So the panel on the reference install would today show **five playlists and no
+radio at all**, including none of the four stations that were hand-curated with
+logos. Radio is the media type this hardware is most obviously for, and it is
+the one with zero favorites — which is a fair summary of the risk this decision
+carries. The response
+is not to add fallbacks to the panel — it is that **favoriting is the interface**.
+Marking something favorite in any Music Assistant client is how it reaches the
+bar, and it takes one tap in an app the user already has. A config file listing
+station names would be a second, worse copy of a thing MA already stores, and
+[§3](#3-items-are-chosen-by-name) exists because that copy drifts.
 
-- `favorites` — everything of that type marked favorite
-- `all` — the whole library for that type, optionally capped and ordered
-- an explicit list of names, for a curated set that ignores both
+The first-run consequence is real and needs handling rather than hiding: a user
+with nothing favorited gets an empty browser. The panel says so, and says what
+to do about it, instead of showing five blank tiles.
 
-Sections concatenate into one virtual list that the browser pages through.
+### Resuming a playlist
+
+Starting a playlist favorite continues after the last track heard, rather than
+restarting it. Both halves of this cost something.
+
+**Where to start from.** MA supports it natively — **proven** in
+`player_queues.play_media`, which takes `start_item: "Optional item to start the
+playlist or album from"`. But **proven** the other way too: Home Assistant's
+`music_assistant` integration does not expose it. Its whole service surface is
+`play_media`, `play_announcement`, `transfer_queue`, `search`, `get_queue` and
+`get_library`, and `play_media` takes only `media_id`, `media_type`, `artist`,
+`album`, `enqueue` and `radio_mode`.
+
+Two ways through, both requiring MA's own API rather than Home Assistant's:
+
+- Call `player_queues/play_media` directly with `start_item`.
+- Or read `music/playlists/playlist_tracks` — **proven** to return each track
+  with its `position` and `uri` — and pass the URIs from the resume point
+  onward as `media_id`, which MA accepts as a list.
+
+**Where the position is remembered.** Not in MA. Its `resume_pos` is elapsed
+seconds within the *current* queue, not a memory of where you were in a given
+playlist last week. So this project stores it: playlist URI → last played track,
+updated as playback moves.
+
+The consequence for the install tiers is the honest part. Everything else the
+panel does works with blueprints alone, but resume needs a Music Assistant
+token — the same credential the artwork layer already uses. So resume belongs
+with the artwork integration rather than with the blueprints, and a
+blueprints-only install starts playlists from the top. That is a working panel,
+not a broken one.
 
 ## 6. The Home Assistant contract
 
@@ -281,7 +497,20 @@ lets the browser change without a rebuild.
 album-or-station, playback state, artwork URL — rather than as a media player
 entity, because the useful fields are scattered across MA's entity model and
 template logic belongs in Home Assistant, not in device YAML. This repo ships
-those templates as an installable package.
+those templates as an importable blueprint, so setting one up is picking a
+player from a dropdown rather than editing YAML.
+
+**Choosing the player** happens in Home Assistant, not on the panel. The
+blueprint takes the Music Assistant player as its target, so changing speakers
+is changing one field — and the panel keeps knowing nothing about speakers,
+which is what lets any player MA supports work.
+
+It is worth recording why the obvious alternative is not available: an ESPHome
+`select` has a **compile-time** options list, so a "pick your speaker" dropdown
+on the device cannot be populated from Home Assistant at runtime. A panel-side
+affordance is therefore a *cycle* — a button asking Home Assistant to move to
+the next player it knows about — rather than a list. That is a later addition;
+the blueprint field is the mechanism.
 
 **The browser** is a request/response pair:
 
@@ -342,22 +571,31 @@ behind it.
 
 Before any of this works on a given install:
 
-- **ESPHome 2026.5 or newer.** The panel uses a global `lvgl: rotation: 90°`
-  with the display and touchscreen left native. Current ESPHome rotates LVGL
-  hit-testing internally to match; earlier versions do not. The raw
-  `touchscreen: on_touch` trigger still reports un-rotated coordinates, which
-  is expected rather than a bug. Developed against 2026.7.3.
+- **ESPHome 2026.7.3 or newer**, which is what this is developed and tested
+  against. The floor tracks current releases rather than reaching back: the
+  project carries no compatibility shims, and 2026.5 was already required
+  because the panel uses a global `lvgl: rotation: 90°` with the display and
+  touchscreen left native, and only current ESPHome rotates LVGL hit-testing to
+  match. The raw `touchscreen: on_touch` trigger still reports un-rotated
+  coordinates, which is expected rather than a bug.
+- **Music Assistant 2.10 or newer**, the version this is developed against.
+  Older releases are not worked around.
 - **Home Assistant's per-device action toggle must be on.** Settings → Devices
   & Services → ESPHome → *device* → gear → "Allow the device to perform Home
   Assistant actions". It defaults off on recent Home Assistant and silently
   no-ops every service call with no error logged anywhere: buttons visibly
-  react and nothing happens. Check this before suspecting a config bug.
+  react and nothing happens. The panel detects this for itself — it calls
+  `script.music_bar_hello` on connect and expects a call back to its `hello_ack`
+  action, and says what is wrong on screen when none arrives. See
+  [adoption.md](adoption.md#the-handshake-and-the-toggle-it-exists-for).
 - **A Music Assistant long-lived token**, created in the MA UI under Settings →
   Profile. The token embedded in Home Assistant's `music_assistant` config
   entry is a different credential and does not authenticate against MA's own
-  API port.
+  API port. This is the project's only credential, and it belongs to the
+  artwork layer — the panel itself needs none.
 - **Somewhere to run the normalizer**, with Pillow. Any host that can reach MA
-  and write to Home Assistant's `www` folder.
+  and write to Home Assistant's `www` folder. Only needed if you want artwork;
+  without it the panel draws monograms.
 - **Correct MDI codepoints.** Icon glyphs are pulled from the Material Design
   Icons webfont at build time. Verify codepoints against `meta.json` in
   `Templarian/MaterialDesign-SVG`; several sit one digit from unrelated icons.
@@ -395,3 +633,21 @@ Each needs its probe to pass before the design above depends on it.
   Gravity is inferred to sit on the Y axis; Z is the untried alternative.
 - **Does a tile survive a library rebuild?** The name-based design predicts yes,
   with no user action. *Probe*: rebuild the MA library and turn a page.
+- **How is "the next favorite" derived from what is playing?** Prev/next step
+  along the favorites list, so Home Assistant has to map the currently playing
+  item back to a position in it. Exact URI match is the obvious route and is
+  **unverified** for the case where playback was started elsewhere, or where a
+  playlist favorite is playing so the current item is a *track* rather than the
+  playlist. *Probe*: start a playlist favorite, read `get_queue`, and check
+  whether anything in it identifies the playlist it came from. If nothing does,
+  the position is state this project keeps rather than something it can infer.
+- **Does resume need MA's API, or will `media_id` as a list do?** MA accepts a
+  list of URIs, so passing tracks from the resume point may avoid needing
+  `start_item`. Both routes still need `playlist_tracks`, which Home Assistant
+  does not expose — so **unverified** is whether any blueprints-only resume is
+  possible at all. *Probe*: call `music_assistant.play_media` with a list of
+  track URIs and confirm the queue matches.
+- ~~**Is an image set in MA's own editor served through the proxy?**~~
+  **Answered**: yes, with a `proxy_id`, fetchable at `?size=256&fmt=png`. It
+  also comes back at the source's aspect ratio rather than square, so it needs
+  normalizing like anything else. See [§4](#what-mas-own-image-editing-does-and-does-not-cover).

@@ -45,20 +45,35 @@ Nothing unbounded ever reaches the panel, so a 4000px scan is fine to drop in.
 
 Because the slug comes from the item name, **renaming an item in Music
 Assistant orphans its override** — the new name makes a new slug, and the old
-filename stops matching. The normalizer notices and tells you which files match
-nothing, so the fix is renaming the file to match. The gallery page will also
-show the item back on a monogram, with the filename it now wants.
+filename stops matching. The normalizer notices, works out which orphaned file
+looks like which newly-monogrammed item, and prints the rename:
+
+```
+These look like renames. From overrides:
+    mv france_musiq.png france_musique.png
+```
+
+Files that resemble nothing are listed without a guess. The gallery page also
+shows the item back on a monogram with the filename it now wants.
+
+If the item was one you added to Music Assistant manually, you have a second
+option since MA 2.9.0: set its image in MA itself and delete your override. The
+normalizer picks it up from Music Assistant on the next run. That only works for
+manually added stations — anything from a provider like radio-browser is not
+editable, which is precisely where overrides earn their keep.
 
 ## Changing one
 
-Replace the file and run the normalizer again. The panel picks it up on its
-next page turn, with no reflash and no restart.
+Replace the file and run the normalizer again.
 
-That works because the normalizer fingerprints each tile's contents into the
-manifest, and Home Assistant appends that fingerprint to the URL it pushes to
-the device. New bytes mean a new URL, and a new URL is the only thing that
-makes the device refetch — the filename alone never changes, so without this a
-swapped override would go unnoticed until reboot.
+The normalizer fingerprints each tile's contents into the manifest so that a
+swapped image produces a new URL. That matters because a new URL is the only
+thing that makes the device refetch — the filename alone never changes, so
+without the fingerprint a replaced override would go unnoticed until reboot.
+
+*The half of this that appends the fingerprint to the URL pushed to the panel
+lives in the Home Assistant blueprint, which is not written yet. Today the
+normalizer records the fingerprint and nothing consumes it.*
 
 ## What gets generated
 

@@ -1,10 +1,14 @@
-# ma-bar-3.49 — user configuration
+# esphome-music-bar — artwork configuration
 #
-# Read by the Home Assistant package (which serves pages to the panel) and by
-# the artwork normalizer. Editing it does not require reflashing the panel.
+# Read by the artwork normalizer, and by the Home Assistant side that serves
+# pages to the panel. Editing it never requires reflashing.
 #
-# See docs/spec.md for why items are addressed by name rather than by URI,
-# and why artwork goes through a normalizer instead of straight to the device.
+# Optional. Without any of this the panel draws its own monograms and the
+# browser still works — artwork is an upgrade, not a prerequisite.
+#
+# The Music Assistant token is not here: set $MA_TOKEN, pass --token, or put it
+# in secrets.yaml. See docs/spec.md for why items are addressed by name rather
+# than by URI, and why artwork goes through a normalizer at all.
 
 music_assistant:
   # Music Assistant's own API, not Home Assistant's.
@@ -19,9 +23,9 @@ home_assistant:
 artwork:
   # Where the normalizer writes, and where the panel reads. The default is
   # Home Assistant's own www folder, which needs no extra infrastructure:
-  #   <ha-config>/www/ma-bar/  ->  http://<ha>:8123/local/ma-bar/
-  base_url: http://192.168.1.10:8123/local/ma-bar
-  output_dir: /config/www/ma-bar
+  #   <ha-config>/www/music-bar/  ->  http://<ha>:8123/local/music-bar/
+  base_url: http://192.168.1.10:8123/local/music-bar
+  output_dir: /config/www/music-bar
 
   # Every image is emitted at exactly this size, square, padded rather than
   # cropped. Do not vary it per section: identical dimensions across all
@@ -49,14 +53,16 @@ artwork:
   # slug: "Radio Meuh" -> radio_meuh.png. See overrides/README.md.
   overrides_dir: ./overrides
 
-# Each section contributes its items to the browser, in this order.
-# source: favorites | all | list
+# Which media types the panel offers, in this order. Favorites only — that is
+# the whole content model (docs/spec.md section 5). Mark something favorite in
+# any Music Assistant client and it appears; there is no list of names to keep
+# in sync here.
+#
+# Drop a type you never favorite, or reorder them to change what comes first.
 sections:
   - name: Radio
     media_type: radio
-    source: all          # only 1 of 15 radios is favorited on the reference
-                         # install — check yours before using `favorites`
-    limit: 20
+    source: favorites
 
   - name: Playlists
     media_type: playlist
@@ -64,9 +70,10 @@ sections:
 
   - name: Albums
     media_type: album
-    source: list
-    items:
-      - Kind of Blue
-      # A name that is ambiguous within its media type can pin an explicit URI.
-      - name: Greatest Hits
-        uri: library://album/412
+    source: favorites
+
+# The normalizer also still accepts `source: all` (optionally with `limit:`) and
+# `source: list` with explicit names. Those predate the favorites-only decision
+# and the panel does not use them; they are useful for generating artwork for
+# something before you favorite it. They will go when the Home Assistant
+# integration lands.

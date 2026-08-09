@@ -1,56 +1,146 @@
-# ma-bar-3.49
+# esphome-music-bar
 
-An ESPHome media panel for **Music Assistant**, running on the **Waveshare
-ESP32-S3-Touch-LCD-3.49** — a 640×172 touch "bar" that sits next to a speaker
-and shows what's playing, with tappable transport controls and a browser for
-your Music Assistant favorites.
+A quick way to put one of your **Music Assistant** favorites on a speaker.
 
-The name encodes the two things this project is actually tied to. It is not a
-general ESPHome dashboard: it assumes that exact board (its display driver,
-resolution, pin map and sensors) and it assumes Music Assistant as the backend
-(its image proxy, library API and playback service). Any speaker Music
-Assistant can drive will work — the panel never talks to the player directly.
+An ESPHome touch bar that sits next to the speaker, shows what's playing, and
+lets you pick something else in one tap. **Prev and next move between your
+favorites, not between tracks** — it's a station selector, not a second remote
+control for whatever is already playing.
 
-Your favorites, and what the browser shows, are read at runtime. Changing them
-never means rebuilding or reflashing the panel.
+- **Favorites are the content.** Whatever you've marked favorite in Music
+  Assistant is what the bar offers. No config file of station names to maintain.
+- **Pick the speaker** in Home Assistant; anything Music Assistant can drive
+  works, because the panel never talks to a player directly.
+- **Playlists resume** where you left off instead of restarting.
+- **Nothing is baked in.** Favorites, artwork and the player are all read at
+  runtime, so changing them never means reflashing.
 
-**Status: early.** The artwork normalizer is built and tested; the ESPHome
-config and the Home Assistant package are not written yet. It descends from a
-working private build, so the hard parts are known rather than guessed.
+Runs on the **Waveshare ESP32-S3-Touch-LCD-3.49** — a 640×172 touch bar — which
+is the only device supported today. Everything board-specific lives in one
+device profile, so adding another is a new file rather than a refactor. Issues
+asking for a device, and pull requests adding one, are both welcome.
 
 - [`docs/spec.md`](docs/spec.md) — the design, and the constraints behind it
+- [`docs/adoption.md`](docs/adoption.md) — how discovery, provisioning and
+  adoption work, and the security model
 - [`docs/plan.md`](docs/plan.md) — where this came from, what is next, and
   which decisions are settled
 
+## Status
+
+**Early.** What exists today:
+
+| Piece | State |
+|---|---|
+| Provisioning, adoption, diagnostics, the Home Assistant contract | **Built** — compiles, validates, not yet flashed to hardware |
+| Artwork normalizer | **Built** — tested against a live 20-item library |
+| Device-drawn monograms (the shared hash) | **Built** — device and script verified to agree |
+| Display, LVGL layout, tiles, transport | **Not written** — waiting on the prior `hifi-panel` build |
+| Blueprints (favorites, prev/next) | **Not written** |
+| Artwork integration and playlist resume | **Not written** |
+
+It descends from a working private build, so the hard parts are known rather
+than guessed. Anything in the spec marked *proven* was measured, not assumed.
+
 ## How it fits together
 
-Three pieces:
+Three layers, and only the first is specific to this panel.
 
-- **The ESPHome config** on the panel. Fixed widgets, no content — it renders
-  whatever it is handed. *Not written yet.*
-- **A Home Assistant package** that resolves item names against Music
-  Assistant, and pushes a page of five items to the panel when it asks.
-  *Not written yet.*
-- **An artwork normalizer** that returns every image at identical dimensions,
-  filling gaps from your own override folder. Not cosmetic: ESPHome
-  reallocates an image buffer whenever the decoded dimensions change, and
-  varying artwork sizes fragment PSRAM until the panel falls over.
-  [`docs/spec.md` §4](docs/spec.md#4-artwork) has the details. *Built.*
+**The firmware.** Fixed widgets, no content — it renders whatever it is handed,
+and knows nothing about Music Assistant or artwork sizing.
+
+**Blueprints.** Read your favorites from Music Assistant, page them, work out
+what "next favorite" means, and push it all into the panel. Ordinary Home
+Assistant config: import, pick your player, done.
+
+**The artwork normalizer.** Returns every image at identical dimensions,
+filling gaps from your own override folder. Optional — see below.
+
+## What you get at each step
+
+| Installed | Browser tiles | Now Playing artwork |
+|---|---|---|
+| Firmware only | Monograms drawn by the panel | none (text only) |
+| \+ blueprints | Monograms drawn by the panel | live from Music Assistant |
+| \+ artwork integration | Your artwork, at a fixed size | live from Music Assistant |
+
+Playlist resume needs the artwork integration too — it requires a Music
+Assistant token, which blueprints don't have. Without it, playlists start from
+the top.
+
+The panel draws its own monograms — an item's initials on a colour derived from
+its name — so the browser works with nothing installed beyond the firmware and a
+blueprint. Artwork is an upgrade, not a prerequisite.
+
+That matters more than it looks. ESPHome reallocates a runtime image's buffer
+whenever the decoded dimensions change, and varying artwork sizes fragment PSRAM
+until the panel falls over ([`docs/spec.md` §4](docs/spec.md#4-artwork)). With no
+artwork configured, no image slot is ever handed a URL and there is nothing to
+fragment. With artwork configured, the normalizer's fixed-size guarantee is what
+makes it safe.
 
 ## Hardware
 
 - **Board**: Waveshare ESP32-S3-Touch-LCD-3.49. AXS15231B QSPI display and
   capacitive touch (one chip drives both), 172×640 native portrait, used
-  rotated 90° as a 640×172 landscape bar.
+  rotated 90° as a 640×172 landscape bar. 16MB flash, octal PSRAM.
 - **Also on board**: QMI8658 IMU on a second I²C bus (GPIO47/48), for
   auto-rotating the display when the panel is mounted the other way up.
 - **Power**: mains. There is a battery circuit; this project does not use it.
 
 ## Requirements
 
-- Music Assistant 2.x, reachable over plain HTTP on the LAN
+- Music Assistant 2.10 or newer, reachable over plain HTTP on the LAN
 - Home Assistant with the Music Assistant integration
-- ESPHome 2026.5 or newer (earlier versions rotate LVGL touch input incorrectly)
+- ESPHome 2026.7.3 or newer
+
+The project tracks current releases of both rather than carrying compatibility
+shims — the features it leans on (runtime encryption keys, correct LVGL touch
+rotation, playlist `start_item`) are all recent.
+
+## Installing
+
+### The panel
+
+No secrets, and nothing to edit. Flash it, provision Wi-Fi over Bluetooth, and
+let Home Assistant hand it an encryption key. Full detail in
+[`docs/adoption.md`](docs/adoption.md).
+
+To build from a clone:
+
+```bash
+make smoke-test      # validate configs, compile the factory image, run tests
+make factory-run     # compile, flash and monitor
+```
+
+| File | Role |
+|---|---|
+| `esphome/music-bar.base.yaml` | Provisioning, diagnostics, the Home Assistant contract. Generic — no board specifics. |
+| `esphome/devices/waveshare-3.49.yaml` | The device profile: pins, screen geometry, tile size. Copy it to add a device. |
+| `esphome/music-bar.factory.yaml` | Device Builder import target. What Home Assistant builds on **Take Control**. |
+| `esphome/music-bar.factory.factory.yaml` | Bench-flash / web-flasher image. What `make factory` builds. |
+| `esphome/music-bar.example.yaml` | Per-device overlay — copy it if you want a fixed name rather than a MAC suffix. |
+| `esphome/secrets-example.yaml` | Offline static-key path. Dev and CI only. |
+
+If the panel says Home Assistant did not answer, the cause is almost always the
+per-device **"Allow the device to perform Home Assistant actions"** toggle,
+which defaults off and silently no-ops every call. The panel names the setting
+on screen; there is a **Retry Home Assistant Handshake** button to test it
+without rebooting.
+
+### The artwork normalizer
+
+Optional. Run it anywhere that can reach Music Assistant and write where Home
+Assistant serves files:
+
+```bash
+cp music-bar.config.example.yaml music-bar.config.yaml   # edit URLs
+export MA_TOKEN=...                                # or use secrets.yaml
+./scripts/normalize-artwork.py --check             # will this work?
+./scripts/normalize-artwork.py
+```
+
+The script carries its own dependencies, so `uv` handles the rest.
 
 ## Artwork, and why some tiles show initials
 
@@ -63,11 +153,14 @@ Assistant, onto your own machine.
 Music Assistant does not have artwork for everything. For anything it lacks,
 the panel shows a monogram: the item's initials on a colour derived from its
 name. Deterministic, so an item keeps its colour, and distinct, so a page of
-them looks like a design rather than a row of identical failure icons.
+them looks like a design rather than a row of identical failure icons. The
+panel and the normalizer compute that colour the same way, so the two render
+identically — a test compiles the device's header and diffs it against the
+Python.
 
 ### Replacing one
 
-After the first normalizer run, open **`http://<your-ha>:8123/local/ma-bar/`**.
+After the first normalizer run, open **`http://<your-ha>:8123/local/music-bar/`**.
 It lists every tile the panel can show, initials-only ones first, each with the
 exact filename it wants.
 
@@ -75,7 +168,7 @@ exact filename it wants.
    — `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif` all work.
 2. Put it in the `overrides/` folder (or wherever `artwork.overrides_dir`
    points).
-3. Run the normalizer again, or press **Refresh artwork** on your dashboard.
+3. Run the normalizer again.
 
 The panel updates on its next page turn. No reflash, no restart. You never need
 to know a slug, an ID, or an image size — the page tells you the filename and
@@ -86,15 +179,20 @@ thing and writes nothing.
 
 ### What happens when things change
 
+Rows marked *planned* depend on the blueprints, which are not written yet.
+
 | You do this | What happens |
 |---|---|
 | **Update the firmware** | Nothing to redo. The panel stores no content — names, URIs and artwork URLs all arrive from Home Assistant at boot. Your overrides are on disk and untouched. |
-| **Change `tile_px` and reflash** | Every cached image is now the wrong size, which breaks the fixed-dimension rule the panel depends on. Rerun the normalizer. It records `tile_px` in the manifest and the Home Assistant package refuses to push mismatched artwork rather than letting the panel destabilise. |
-| **Favorite something new** | It appears on the next page turn — pages are built live from Music Assistant. Its artwork is generated on the next normalizer run, which Home Assistant triggers as soon as it sees an item it has no image for. |
-| **Unfavorite something** | It drops off the next page turn. Its image file is left behind harmlessly. |
-| **A station gains a logo it never had** | Picked up on the next normalizer run, which re-checks Music Assistant for anything still on a monogram rather than caching the absence. New artwork means a new fingerprint, a new URL, and the panel refetches on its next page turn. |
+| **Change `tile_px` and reflash** | Every cached image is now the wrong size, which breaks the fixed-dimension rule the panel depends on. Rerun the normalizer with `--force`. It records `tile_px` in the manifest, and the panel reports the size it was built for, so the two can be compared. *(Comparison is planned.)* |
+| **Music Assistant is down when the normalizer runs** | Existing tiles are kept exactly as they are, and the run exits non-zero. It will not replace real artwork with monograms. |
+| **Favorite something new** | *(Planned.)* It appears on the next page turn — pages are built live from Music Assistant. Until its artwork is generated it shows a monogram. |
+| **Unfavorite something** | *(Planned.)* It drops off the next page turn. Its image file is left behind harmlessly. |
+| **A station gains a logo it never had** | Picked up on the next normalizer run, which re-checks Music Assistant for anything still on a monogram rather than caching the absence. |
 | **You add an override for something that already had artwork** | Yours wins. The order is your file, then Music Assistant, then a monogram, and it is checked fresh every run. |
-| **You rename an item in Music Assistant** | The new name makes a new slug, so the old override filename stops matching and the tile falls back to a monogram. The normalizer lists override files that match nothing, and the gallery shows the filename now wanted — rename the file. |
+| **You rename an item in Music Assistant** | The new name makes a new slug, so the old override filename stops matching and the tile falls back to a monogram. The normalizer works out which orphaned file goes with which newly-monogrammed item and prints the `mv` to fix it. |
+| **You set an image in Music Assistant itself** | Picked up on the next normalizer run, no override needed. Only possible for stations you added manually — provider-sourced ones are not editable, which is what `overrides/` is for. |
+| **Two items of different types share a name** | Both tiles survive. The second gets a suffixed filename (`blue_album.png`) and the run says so. |
 
 ## Prior art
 
