@@ -130,6 +130,27 @@ api:
         - lambda: |-
             id(ha_handshake_ok) = true;
         - script.execute: announce_setup_state
+        # Ask for the first page as soon as anyone is listening.
+        - script.execute:
+            id: request_page
+            page: 0
+
+    # Where the panel currently sits in the favorites list, and how long that
+    # list is. Home Assistant sets this whenever it starts a favorite; the
+    # panel uses it as the cursor prev/next move.
+    #
+    # An index of -1 means "playing something that is not one of your
+    # favorites", which is the normal state after starting music from a phone.
+    # Next from there goes to the first favorite rather than guessing.
+    #
+    # How long the list is arrives with each page instead, since that is when
+    # Home Assistant has counted it anyway.
+    - action: set_favorite_index
+      variables:
+        index: int
+      then:
+        - lambda: |-
+            id(favorite_index) = index;
 
     # Now Playing. Pushed as flat fields rather than a media player entity
     # because the useful values are scattered across Music Assistant's entity
@@ -165,6 +186,7 @@ api:
       variables:
         page: int
         total_pages: int
+        total_items: int
         names: string[]
         uris: string[]
         art_urls: string[]
@@ -172,6 +194,7 @@ api:
         - lambda: |-
             id(page_index) = page;
             id(page_total) = total_pages;
+            id(favorite_total) = total_items;
             id(tile_names).assign(names.begin(), names.end());
             id(tile_uris).assign(uris.begin(), uris.end());
             id(tile_art_urls).assign(art_urls.begin(), art_urls.end());
@@ -251,6 +274,35 @@ globals:
     type: std::string
     restore_value: false
 
+  # Where the panel sits in the favorites list. The list itself lives in Home
+  # Assistant — this is only the cursor, so prev/next are arithmetic here and a
+  # lookup there. -1 means what is playing is not a favorite.
+  - id: favorite_index
+    type: int
+    restore_value: false
+    initial_value: "-1"
+  - id: favorite_total
+    type: int
+    restore_value: false
+    initial_value: "0"
+
+  # Scratch for the outgoing event payloads. Script parameters are not in scope
+  # inside the event's own lambdas, so the values are staged here first.
+  - id: page_requested
+    type: int
+    restore_value: false
+    initial_value: "0"
+  - id: pending_index
+    type: int
+    restore_value: false
+    initial_value: "0"
+  - id: pending_uri
+    type: std::string
+    restore_value: false
+  - id: pending_name
+    type: std::string
+    restore_value: false
+
   # The current browser page.
   - id: page_index
     type: int
@@ -270,20 +322,123 @@ globals:
     type: std::vector<std::string>
     restore_value: false
 
+# Everything the panel asks of Home Assistant goes out as an event rather than
+# as a call to a named script.
+#
+# Events are what blueprints can trigger on. A script call would tie the
+# firmware to one entity id — `script.music_bar_page` — which a user creating a
+# script from a blueprint cannot be made to produce, since the entity id comes
+# from whatever they name it. An event has no such constraint, so the whole
+# Home Assistant side can ship as blueprints with nothing to rename.
+#
+# Every event carries `device`, taken from App.get_name() rather than the
+# `name` substitution, because name_add_mac_suffix means the running device is
+# `music-bar-a1b2c3` and not `music-bar`. Home Assistant turns that back into
+# the action prefix by replacing dashes with underscores.
 script:
   # Ask Home Assistant to prove it can call back. The blueprint answers by
-  # calling the hello_ack action above.
+  # calling the hello_ack action above. Nothing else is attempted until it does.
   - id: ha_handshake
     mode: restart
     then:
       - lambda: |-
           id(ha_handshake_attempted) = true;
-      - homeassistant.action:
-          action: script.music_bar_hello
+      - homeassistant.event:
+          event: esphome.music_bar_hello
           data:
-            device: "${name}"
+            device: !lambda "return App.get_name();"
       - delay: ${handshake_timeout}
       - script.execute: announce_setup_state
+
+  # Ask for a page of favorites. Wraps at both ends, so paging past the last
+  # page returns to the first rather than stopping dead.
+  - id: request_page
+    mode: restart
+    parameters:
+      page: int
+    then:
+      - lambda: |-
+          int target = page;
+          if (id(page_total) > 0) {
+            if (target < 0) target = id(page_total) - 1;
+            if (target >= id(page_total)) target = 0;
+          } else if (target < 0) {
+            target = 0;
+          }
+          id(page_requested) = target;
+      - homeassistant.event:
+          event: esphome.music_bar_page
+          data:
+            device: !lambda "return App.get_name();"
+            page: !lambda "return id(page_requested);"
+
+  # Play a tile from the current page. The panel sends the URI it was given
+  # rather than a name, because it already has the resolved value and a second
+  # name lookup could land somewhere else.
+  - id: play_tile
+    mode: restart
+    parameters:
+      index: int
+    then:
+      - lambda: |-
+          id(pending_uri) = "";
+          id(pending_name) = "";
+          id(pending_index) = index;
+          if (index >= 0 && index < (int) id(tile_uris).size()) {
+            id(pending_uri) = id(tile_uris)[index];
+            if (index < (int) id(tile_names).size())
+              id(pending_name) = id(tile_names)[index];
+          }
+      - if:
+          condition:
+            lambda: "return !id(pending_uri).empty();"
+          then:
+            - homeassistant.event:
+                event: esphome.music_bar_play
+                data:
+                  device: !lambda "return App.get_name();"
+                  uri: !lambda "return id(pending_uri);"
+                  name: !lambda "return id(pending_name);"
+                  # Where this tile sits in the whole favorites list, so prev
+                  # and next continue from the pick rather than from wherever
+                  # the cursor had got to.
+                  index: !lambda "return id(page_index) * 5 + id(pending_index);"
+          else:
+            - lambda: 'ESP_LOGW("music_bar", "tile %d has no URI", index);'
+
+  # Prev / next: move the cursor along the favorites list and ask Home
+  # Assistant to play whatever lands there. Arithmetic here, lookup there.
+  - id: favorite_step
+    mode: restart
+    parameters:
+      delta: int
+    then:
+      - lambda: |-
+          const int total = id(favorite_total);
+          if (total <= 0) {
+            // Home Assistant has not told us how long the list is yet.
+            id(pending_index) = 0;
+          } else if (id(favorite_index) < 0) {
+            // Playing something that is not a favorite. Step in from the end
+            // the user asked for rather than guessing at a position.
+            id(pending_index) = delta >= 0 ? 0 : total - 1;
+          } else {
+            id(pending_index) = (id(favorite_index) + delta % total + total) % total;
+          }
+      - homeassistant.event:
+          event: esphome.music_bar_play_index
+          data:
+            device: !lambda "return App.get_name();"
+            index: !lambda "return id(pending_index);"
+
+  - id: transport_play_pause
+    mode: restart
+    then:
+      - homeassistant.event:
+          event: esphome.music_bar_transport
+          data:
+            device: !lambda "return App.get_name();"
+            action: "play_pause"
 
   # One place that decides what the panel is currently telling the user.
   - id: announce_setup_state
@@ -421,6 +576,86 @@ button:
     entity_category: config
     on_press:
       - script.execute: ha_handshake
+
+  # -- Controls -------------------------------------------------------------
+  # These are the real controls, exposed as entities. The LVGL buttons will
+  # call the same scripts, so the transport works identically whether it is
+  # driven from the panel's own screen, from a Home Assistant dashboard, or
+  # from an automation.
+  #
+  # They also make the panel fully testable before the display exists: flash
+  # this, adopt it, and the entire Home Assistant contract can be exercised
+  # from the device page while the screen is still blank.
+
+  - platform: template
+    name: "Previous Favorite"
+    id: prev_favorite_button
+    icon: mdi:skip-previous
+    on_press:
+      - script.execute:
+          id: favorite_step
+          delta: -1
+
+  - platform: template
+    name: "Next Favorite"
+    id: next_favorite_button
+    icon: mdi:skip-next
+    on_press:
+      - script.execute:
+          id: favorite_step
+          delta: 1
+
+  - platform: template
+    name: "Play Pause"
+    id: play_pause_button
+    icon: mdi:play-pause
+    on_press:
+      - script.execute: transport_play_pause
+
+  - platform: template
+    name: "Next Page"
+    id: next_page_button
+    icon: mdi:chevron-right
+    entity_category: diagnostic
+    on_press:
+      - script.execute:
+          id: request_page
+          page: !lambda "return id(page_index) + 1;"
+
+  - platform: template
+    name: "Previous Page"
+    id: prev_page_button
+    icon: mdi:chevron-left
+    entity_category: diagnostic
+    on_press:
+      - script.execute:
+          id: request_page
+          page: !lambda "return id(page_index) - 1;"
+
+  # Stands in for tapping a tile until there are tiles to tap. Set Tile Number,
+  # then press this.
+  - platform: template
+    name: "Play Selected Tile"
+    id: play_tile_button
+    icon: mdi:play-box
+    entity_category: diagnostic
+    on_press:
+      - script.execute:
+          id: play_tile
+          index: !lambda "return (int) id(tile_number).state - 1;"
+
+number:
+  - platform: template
+    name: "Tile Number"
+    id: tile_number
+    icon: mdi:numeric
+    entity_category: diagnostic
+    optimistic: true
+    restore_value: false
+    initial_value: 1
+    min_value: 1
+    max_value: 5
+    step: 1
 
 # -- Optional ---------------------------------------------------------------
 # Local web UI at http://<device>.local. Off by default: Home Assistant is the

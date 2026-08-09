@@ -35,8 +35,9 @@ asking for a device, and pull requests adding one, are both welcome.
 | Provisioning, adoption, diagnostics, the Home Assistant contract | **Built** — compiles, validates, not yet flashed to hardware |
 | Artwork normalizer | **Built** — tested against a live 20-item library |
 | Device-drawn monograms (the shared hash) | **Built** — device and script verified to agree |
+| The device→Home Assistant contract | **Built** — exposed as entities, so it works before the screen does |
 | Display, LVGL layout, tiles, transport | **Not written** — waiting on the prior `hifi-panel` build |
-| Blueprints (favorites, prev/next) | **Not written** |
+| Blueprints (favorites, prev/next, now playing) | **Built** — validated offline, not yet run in Home Assistant |
 | Artwork integration and playlist resume | **Not written** |
 
 It descends from a working private build, so the hard parts are known rather
@@ -127,6 +128,16 @@ per-device **"Allow the device to perform Home Assistant actions"** toggle,
 which defaults off and silently no-ops every call. The panel names the setting
 on screen; there is a **Retry Home Assistant Handshake** button to test it
 without rebooting.
+
+### The Home Assistant side
+
+Import two blueprints and pick your player. See
+[`blueprints/README.md`](blueprints/README.md).
+
+Until the display lands, the panel's controls are exposed as Home Assistant
+entities — **Next Favorite**, **Play Pause**, **Next Page**, **Play Selected
+Tile** — so the whole thing can be flashed, adopted and driven from its device
+page with a blank screen.
 
 ### The artwork normalizer
 

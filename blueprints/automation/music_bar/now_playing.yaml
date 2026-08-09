@@ -1,0 +1,96 @@
+blueprint:
+  name: Music Bar — Now Playing
+  description: >-
+    Pushes what a Music Assistant player is doing onto a Music Bar panel.
+
+
+    The panel holds no content of its own: title, artist, album and artwork all
+    arrive through this automation, which is what lets the display change
+    without ever reflashing the firmware.
+
+
+    Pair it with **Music Bar — Favorites** to make the panel's buttons work.
+    This blueprint only sends; that one answers.
+
+
+    **You need the panel's device name**, which is its ESPHome hostname rather
+    than its friendly name — something like `music-bar-a1b2c3`, since the
+    firmware appends the MAC so several unflashed panels do not collide. Find it
+    in Settings → Devices & Services → ESPHome, or on the panel's **IP Address**
+    diagnostic entity.
+  domain: automation
+  homeassistant:
+    min_version: 2024.10.0
+  input:
+    ma_player:
+      name: Music Assistant player
+      description: The player this panel follows.
+      selector:
+        entity:
+          filter:
+            - domain: media_player
+              integration: music_assistant
+    device_name:
+      name: Panel device name
+      description: >-
+        The ESPHome name of the panel, e.g. music-bar-a1b2c3. Not the friendly
+        name.
+      default: music-bar
+      selector:
+        text:
+    base_url:
+      name: Home Assistant base URL
+      description: >-
+        Only needed if artwork does not appear. Music Assistant usually reports
+        absolute artwork URLs, in which case this is ignored; if yours are
+        relative paths beginning with /, this is prepended. Example:
+        http://homeassistant.local:8123
+      default: ""
+      selector:
+        text:
+
+# Attribute changes on a media player are frequent — every progress update on
+# some providers. queued rather than restart, so a burst still ends with the
+# panel holding the final state rather than a half-applied one.
+mode: queued
+max: 10
+max_exceeded: silent
+
+triggers:
+  # No `to:` and no `attribute:`, so this fires on attribute changes too. The
+  # useful fields (title, artist, artwork) are all attributes; watching only
+  # the state would update the panel when playback starts and never again.
+  - trigger: state
+    entity_id: !input ma_player
+
+variables:
+  # Order matters: Home Assistant evaluates these top to bottom, so anything
+  # referenced by a later entry has to be defined above it.
+  player: !input ma_player
+  base: !input base_url
+  device_name_raw: !input device_name
+  # ESPHome exposes each user-defined action as esphome.<node_name>_<action>,
+  # with dashes turned into underscores.
+  prefix: "{{ device_name_raw | lower | replace('-', '_') }}"
+  picture: "{{ state_attr(player, 'entity_picture') }}"
+
+actions:
+  - action: "esphome.{{ prefix }}_now_playing"
+    data:
+      title: "{{ state_attr(player, 'media_title') or '' }}"
+      artist: "{{ state_attr(player, 'media_artist') or '' }}"
+      # Radio has no album; Music Assistant puts the station in media_channel.
+      # The panel shows one line for whichever applies.
+      album: >-
+        {{ state_attr(player, 'media_album_name')
+           or state_attr(player, 'media_channel') or '' }}
+      state: "{{ states(player) }}"
+      # Music Assistant normally gives an absolute URL here, including its own
+      # port. If it is a relative path the panel cannot fetch it, so fall back
+      # to the configured base URL.
+      art_url: >-
+        {% if not picture %}{{ '' }}
+        {% elif picture.startswith('http') %}{{ picture }}
+        {% elif base %}{{ base ~ picture }}
+        {% else %}{{ '' }}
+        {% endif %}

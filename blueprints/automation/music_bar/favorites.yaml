@@ -1,0 +1,223 @@
+blueprint:
+  name: Music Bar — Favorites, browsing and transport
+  description: >-
+    Answers everything a Music Bar panel asks for: the handshake it needs to
+    know Home Assistant is listening, pages of your Music Assistant favorites,
+    and playback when you tap a tile or press prev / next.
+
+
+    **Favorites are the content.** Whatever you have marked favorite in Music
+    Assistant is what the panel offers, in the media-type order you choose
+    below. Mark something favorite in any Music Assistant client and it appears
+    on the next page turn — there is no list to maintain here.
+
+
+    **Prev and next move between favorites, not between tracks.** The panel is a
+    station selector; skipping within an album or playlist is what your phone is
+    for.
+
+
+    Pair with **Music Bar — Now Playing**, which sends the other direction.
+
+
+    Artwork is not sent by this blueprint — tiles show the panel's own
+    monograms, which look deliberate rather than broken. Install the artwork
+    integration to replace them with real images.
+  domain: automation
+  homeassistant:
+    min_version: 2024.10.0
+  input:
+    ma_player:
+      name: Music Assistant player
+      description: The player the panel controls.
+      selector:
+        entity:
+          filter:
+            - domain: media_player
+              integration: music_assistant
+    media_types:
+      name: What to offer
+      description: >-
+        Which kinds of favorite appear on the panel, in this order. Leave out
+        anything you never favorite — a type with no favorites simply
+        contributes nothing.
+      default:
+        - radio
+        - playlist
+      selector:
+        select:
+          multiple: true
+          options:
+            - label: Radio stations
+              value: radio
+            - label: Playlists
+              value: playlist
+            - label: Albums
+              value: album
+            - label: Artists
+              value: artist
+            - label: Tracks
+              value: track
+    max_items:
+      name: Maximum favorites per type
+      description: Guards against a very large library making page turns slow.
+      default: 100
+      selector:
+        number:
+          min: 5
+          max: 500
+          step: 5
+
+# queued, not restart: a page request and a play can arrive together when
+# someone taps quickly, and dropping the first would lose a tile the panel is
+# already waiting for.
+mode: queued
+max: 10
+
+triggers:
+  # The panel calls out by firing events rather than by calling a named script,
+  # because an event has no entity id to get wrong. Everything it asks for
+  # arrives here.
+  - trigger: event
+    event_type: esphome.music_bar_hello
+    id: hello
+  - trigger: event
+    event_type: esphome.music_bar_page
+    id: page
+  - trigger: event
+    event_type: esphome.music_bar_play
+    id: play
+  - trigger: event
+    event_type: esphome.music_bar_play_index
+    id: play_index
+  - trigger: event
+    event_type: esphome.music_bar_transport
+    id: transport
+
+variables:
+  player: !input ma_player
+  types: !input media_types
+  per_type: !input max_items
+  # Five tiles across is fixed in the panel's LVGL layout — widgets are created
+  # at compile time, so this is not a preference.
+  page_size: 5
+  # The panel sends its own ESPHome name, so nothing here has to be told which
+  # device to answer. Actions are exposed as esphome.<node_name>_<action> with
+  # dashes turned into underscores.
+  prefix: "{{ trigger.event.data.device | lower | replace('-', '_') }}"
+  # get_library is a Music Assistant service rather than an entity one, so it
+  # needs the config entry rather than a target. Derive it from the chosen
+  # player instead of asking the user for an opaque id.
+  entry: "{{ config_entry_id(player) }}"
+
+actions:
+  - choose:
+      # ── The handshake ────────────────────────────────────────────────────
+      # The panel assumes it is not set up until this answer arrives, and says
+      # so on its screen. Answering it is the whole job here; the panel asks
+      # for its first page as soon as it hears back.
+      - conditions:
+          - condition: trigger
+            id: hello
+        sequence:
+          - action: "esphome.{{ prefix }}_hello_ack"
+
+      # ── Play / pause ─────────────────────────────────────────────────────
+      - conditions:
+          - condition: trigger
+            id: transport
+        sequence:
+          - action: media_player.media_play_pause
+            target:
+              entity_id: "{{ player }}"
+
+      # ── A tile was tapped ────────────────────────────────────────────────
+      # The panel sends the URI it was given rather than a name, so nothing is
+      # resolved twice and the tile plays exactly what it showed. It also sends
+      # the tile's position in the whole list, so prev and next carry on from
+      # the pick.
+      - conditions:
+          - condition: trigger
+            id: play
+        sequence:
+          - action: music_assistant.play_media
+            target:
+              entity_id: "{{ player }}"
+            data:
+              media_id: "{{ trigger.event.data.uri }}"
+              enqueue: replace
+          - action: "esphome.{{ prefix }}_set_favorite_index"
+            data:
+              index: "{{ trigger.event.data.index | int(0) }}"
+
+      # ── A page of favorites, or prev / next ──────────────────────────────
+      # Both need the same list, so they share the work of building it.
+      - conditions:
+          - condition: or
+            conditions:
+              - condition: trigger
+                id: page
+              - condition: trigger
+                id: play_index
+        sequence:
+          - variables:
+              favorites: []
+          - repeat:
+              for_each: "{{ types }}"
+              sequence:
+                - action: music_assistant.get_library
+                  data:
+                    config_entry_id: "{{ entry }}"
+                    media_type: "{{ repeat.item }}"
+                    favorite: true
+                    limit: "{{ per_type }}"
+                    order_by: name
+                  response_variable: library
+                - variables:
+                    # Accumulates across iterations: each pass sees the value
+                    # the previous one left.
+                    favorites: "{{ favorites + (library['items'] | default([], true)) }}"
+
+          - choose:
+              # Prev / next. The panel keeps the cursor and does the
+              # arithmetic; this only has to look up where it landed.
+              - conditions:
+                  - condition: trigger
+                    id: play_index
+                sequence:
+                  - variables:
+                      wanted: "{{ trigger.event.data.index | int(0) }}"
+                  - condition: template
+                    value_template: "{{ 0 <= wanted < (favorites | count) }}"
+                  - action: music_assistant.play_media
+                    target:
+                      entity_id: "{{ player }}"
+                    data:
+                      media_id: "{{ favorites[wanted]['uri'] }}"
+                      enqueue: replace
+                  - action: "esphome.{{ prefix }}_set_favorite_index"
+                    data:
+                      index: "{{ wanted }}"
+
+            # A page. Sent even when empty, so the panel can say "nothing is
+            # favorited" rather than sitting on a stale page or an empty screen
+            # with no explanation.
+            default:
+              - variables:
+                  total: "{{ favorites | count }}"
+                  pages: "{{ [ (total / page_size) | round(0, 'ceil') | int, 1 ] | max }}"
+                  index: "{{ trigger.event.data.page | int(0) }}"
+                  window: "{{ favorites[index * page_size : index * page_size + page_size] }}"
+              - action: "esphome.{{ prefix }}_page"
+                data:
+                  page: "{{ index }}"
+                  total_pages: "{{ pages }}"
+                  total_items: "{{ total }}"
+                  names: "{{ window | map(attribute='name') | list }}"
+                  uris: "{{ window | map(attribute='uri') | list }}"
+                  # Empty until the artwork integration is installed. An empty
+                  # URL is not a failure: the panel draws its own monogram for
+                  # that tile and never touches an image slot, which is also
+                  # what keeps it away from the PSRAM fragmentation that
+                  # varying artwork sizes cause.
+                  art_urls: "{{ [''] * (window | count) }}"
