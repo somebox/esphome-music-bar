@@ -201,6 +201,17 @@ api:
             // having changed. (docs/spec.md section 6)
             id(np_art_url) = music_bar::strip_origin(art_url);
             id(np_art_url_full) = art_url;
+            // Only when the track actually changes: Home Assistant pushes on
+            // every attribute change, which on some providers includes a
+            // position update every second.
+            static std::string last_logged;
+            std::string sig = album + "|" + artist + "|" + title;
+            if (sig != last_logged) {
+              last_logged = sig;
+              ESP_LOGI("music_bar", "now playing: %s / %s / %s [%s]%s",
+                       album.c_str(), artist.c_str(), title.c_str(),
+                       state.c_str(), art_url.empty() ? " (no art)" : "");
+            }
         - script.execute: paint_now_playing
 
     # One browser page: five items, in order. Artwork URLs may be empty, in
@@ -222,8 +233,12 @@ api:
             id(tile_names).assign(names.begin(), names.end());
             id(tile_uris).assign(uris.begin(), uris.end());
             id(tile_art_urls).assign(art_urls.begin(), art_urls.end());
-            ESP_LOGD("music_bar", "page %d/%d, %u items, %u with artwork",
+            // INFO, not DEBUG: a page turn happens at human rate, and this
+            // one line answers "is Home Assistant actually answering?" — the
+            // question every install failure so far has come down to.
+            ESP_LOGI("music_bar", "page %d/%d, %u of %d favorites, %u with artwork",
                      page + 1, total_pages, (unsigned) id(tile_names).size(),
+                     total_items,
                      (unsigned) music_bar::count_non_empty(id(tile_art_urls)));
         - script.execute: paint_tiles
 
