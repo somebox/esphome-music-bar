@@ -32,13 +32,17 @@ asking for a device, and pull requests adding one, are both welcome.
 
 | Piece | State |
 |---|---|
-| Provisioning, adoption, diagnostics, the Home Assistant contract | **Built** — compiles, validates, not yet flashed to hardware |
-| Artwork normalizer | **Built** — tested against a live 20-item library |
+| Provisioning, adoption, diagnostics | **Working on hardware** — flashed, provisioned over Wi-Fi, adopted with a Home Assistant-generated encryption key that survives a reboot |
+| The device→Home Assistant contract | **Built** — exposed as entities, so the panel is drivable before the screen exists |
+| Artwork normalizer | **Built** — tested against a live library |
 | Device-drawn monograms (the shared hash) | **Built** — device and script verified to agree |
-| The device→Home Assistant contract | **Built** — exposed as entities, so it works before the screen does |
+| Blueprints (favorites, prev/next, now playing) | **Built** — validated offline; the round trip is not yet confirmed against a live Home Assistant |
 | Display, LVGL layout, tiles, transport | **Not written** — waiting on the prior `hifi-panel` build |
-| Blueprints (favorites, prev/next, now playing) | **Built** — validated offline, not yet run in Home Assistant |
 | Artwork integration and playlist resume | **Not written** |
+
+Measured on the reference panel rather than assumed: PSRAM comes up as 8192 KB
+octal at 80MHz, and the factory image uses 42.5% of internal RAM with no
+display in it — which is the budget the framebuffer has to fit alongside.
 
 It descends from a working private build, so the hard parts are known rather
 than guessed. Anything in the spec marked *proven* was measured, not assumed.
