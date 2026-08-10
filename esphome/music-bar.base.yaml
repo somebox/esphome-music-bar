@@ -188,10 +188,10 @@ api:
         art_url: string
       then:
         - lambda: |-
-            id(np_title) = title;
-            id(np_artist) = artist;
-            id(np_album) = album;
-            id(np_state) = state;
+            id(np_title) = music_bar::clean(title);
+            id(np_artist) = music_bar::clean(artist);
+            id(np_album) = music_bar::clean(album);
+            id(np_state) = music_bar::clean(state);
             // Music Assistant answers on two ports and Home Assistant
             // alternates entity_picture between them, so identical artwork
             // arrives as two different URLs seconds apart. Compare path and
@@ -199,18 +199,22 @@ api:
             // online_image silently drops an update while a download is in
             // flight, so a requested-URL variable can advance without anything
             // having changed. (docs/spec.md section 6)
-            id(np_art_url) = music_bar::strip_origin(art_url);
-            id(np_art_url_full) = art_url;
+            {
+              const std::string art = music_bar::clean(art_url);
+              id(np_art_url) = music_bar::strip_origin(art);
+              id(np_art_url_full) = art;
+            }
             // Only when the track actually changes: Home Assistant pushes on
             // every attribute change, which on some providers includes a
             // position update every second.
             static std::string last_logged;
-            std::string sig = album + "|" + artist + "|" + title;
+            std::string sig = id(np_album) + "|" + id(np_artist) + "|" + id(np_title);
             if (sig != last_logged) {
               last_logged = sig;
               ESP_LOGI("music_bar", "now playing: %s / %s / %s [%s]%s",
-                       album.c_str(), artist.c_str(), title.c_str(),
-                       state.c_str(), art_url.empty() ? " (no art)" : "");
+                       id(np_album).c_str(), id(np_artist).c_str(),
+                       id(np_title).c_str(), id(np_state).c_str(),
+                       id(np_art_url).empty() ? " (no art)" : "");
             }
         - script.execute: paint_now_playing
 
@@ -639,15 +643,23 @@ script:
   - id: paint_now_playing
     mode: restart
     then:
+      # Every line is rewritten on every push, including to empty. Updating
+      # only the fields that arrived leaves the previous track's artist sitting
+      # under the new title, which reads as a bug in the panel rather than as
+      # missing metadata.
       - lvgl.label.update:
           id: lbl_album
           text: !lambda |-
             if (!id(np_album).empty()) return id(np_album);
             if (!id(np_artist).empty()) return id(np_artist);
-            return std::string("Music Bar");
+            if (!id(np_title).empty()) return id(np_title);
+            // Nothing at all: say so, rather than leaving the last track up.
+            return std::string("Nothing playing");
       - lvgl.label.update:
           id: lbl_artist
-          text: !lambda "return id(np_artist);"
+          text: !lambda |-
+            // The artist line is blank when it is the album line already.
+            return id(np_album).empty() ? std::string("") : id(np_artist);
       - lvgl.label.update:
           id: lbl_title
           text: !lambda "return id(np_title);"

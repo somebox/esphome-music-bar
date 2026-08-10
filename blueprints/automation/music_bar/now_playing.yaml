@@ -63,6 +63,18 @@ triggers:
   - trigger: state
     entity_id: !input ma_player
 
+  # A state trigger only fires on *change*, so a panel that connects while
+  # music is already playing is told nothing and sits on stale text until the
+  # track next changes — which on radio can be hours. These three cover that:
+  # the panel announcing itself, Home Assistant restarting, and a slow
+  # reconcile for any push missed in between.
+  - trigger: event
+    event_type: esphome.music_bar_hello
+  - trigger: homeassistant
+    event: start
+  - trigger: time_pattern
+    minutes: "/1"
+
 variables:
   # Order matters: Home Assistant evaluates these top to bottom, so anything
   # referenced by a later entry has to be defined above it.
