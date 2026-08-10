@@ -79,6 +79,13 @@ esphome:
   on_boot:
     priority: -100
     then:
+      # Constants, published once. See the note on these sensors below.
+      - text_sensor.template.publish:
+          id: tile_size
+          state: "${tile_px}"
+      - text_sensor.template.publish:
+          id: device_profile_sensor
+          state: "${device_profile}"
       - script.execute: announce_setup_state
 
 # Waveshare ESP32-S3-Touch-LCD-3.49: 16MB flash, octal PSRAM. ESPHome needs a
@@ -510,15 +517,23 @@ text_sensor:
     entity_category: diagnostic
     update_interval: never
 
+  # Both of these are compile-time constants, so they are published once from
+  # on_boot rather than polled.
+  #
+  # They deliberately carry no `lambda:`. A template sensor with
+  # `update_interval: never` never runs its lambda — that is what `never`
+  # means — so a lambda here would leave the entity permanently empty, which is
+  # exactly what happened the first time this was flashed. Anything comparing
+  # against it would have been comparing against an empty string and finding no
+  # disagreement.
+
   # The size this firmware's image slots are built for. The artwork side
   # compares this against the manifest and refuses to push mismatched images.
   - platform: template
     name: "Tile Size"
     id: tile_size
     entity_category: diagnostic
-    disabled_by_default: true
     update_interval: never
-    lambda: 'return {"${tile_px}"};'
 
   # Which panel this firmware was built for. Worth reporting because the
   # project supports one device today and expects to support more.
@@ -526,9 +541,7 @@ text_sensor:
     name: "Device Profile"
     id: device_profile_sensor
     entity_category: diagnostic
-    disabled_by_default: true
     update_interval: never
-    lambda: 'return {"${device_profile}"};'
 
   - platform: wifi_info
     ip_address:
