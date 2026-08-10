@@ -166,28 +166,29 @@ actions:
               - condition: trigger
                 id: play_index
         sequence:
-          # get_library needs a Music Assistant config entry. If the chosen
-          # player is not a Music Assistant entity — picking the speaker's own
-          # entity rather than its Music Assistant queue is the easy mistake —
-          # this resolves to the wrong integration or to nothing, the library
-          # call fails, and the panel simply never receives a page. Say so
-          # where it can be seen instead of failing silently.
+          # get_library needs a Music Assistant config entry, derived from the
+          # chosen player. Picking a speaker's own entity rather than its Music
+          # Assistant queue is the easy mistake: the library call then fails and
+          # the panel simply never receives a page. Say so where it can be seen.
+          #
+          # `if:` takes its conditions directly, with `then:` as a sibling key.
+          # Nesting them under `conditions:`/`then:` inside `if:` fails
+          # validation with "Unexpected value for condition: 'None'".
           - if:
-              conditions:
-                - condition: template
-                  value_template: "{{ not entry }}"
-              then:
-                - action: persistent_notification.create
-                  data:
-                    title: Music Bar
-                    notification_id: music_bar_no_entry
-                    message: >-
-                      {{ player }} is not a Music Assistant player, so the
-                      panel's favorites cannot be read. Pick the Music
-                      Assistant entity for your speaker (its queue) rather than
-                      the speaker's own media player entity, then save the
-                      Music Bar Favorites automation again.
-                - stop: "player is not a Music Assistant entity"
+              - condition: template
+                value_template: "{{ not entry }}"
+            then:
+              - action: persistent_notification.create
+                data:
+                  title: Music Bar
+                  notification_id: music_bar_no_entry
+                  message: >-
+                    {{ player }} is not a Music Assistant player, so the panel's
+                    favorites cannot be read. Pick the Music Assistant entity for
+                    your speaker (its queue) rather than the speaker's own media
+                    player entity, then save the Music Bar Favorites automation
+                    again.
+              - stop: "player is not a Music Assistant entity"
           - variables:
               favorites: []
           - repeat:

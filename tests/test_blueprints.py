@@ -121,3 +121,53 @@ def test_tiles_per_page_matches_the_firmware():
     so a blueprint sending six would silently drop one."""
     favorites = next(p for p in BLUEPRINTS if p.name == "favorites.yaml")
     assert load(favorites)["variables"]["page_size"] == 5
+
+
+# ── Action-syntax shapes Home Assistant rejects at load ─────────────────────
+#
+# These are not style checks. Each one shipped at least once and produced a
+# "Message malformed" that only appears when a user imports the blueprint —
+# nothing in the repo catches it otherwise, because the file is valid YAML.
+
+
+def walk_actions(node):
+    """Every mapping in the document, wherever it is nested."""
+    if isinstance(node, dict):
+        yield node
+        for value in node.values():
+            yield from walk_actions(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from walk_actions(item)
+
+
+@pytest.mark.parametrize("path", BLUEPRINTS, ids=lambda p: p.name)
+def test_if_actions_take_conditions_directly(path):
+    """`if:` is a list of conditions with `then:` as a sibling key.
+
+    Writing `if: {conditions: [...], then: [...]}` is valid YAML and invalid
+    Home Assistant: it fails with "Unexpected value for condition: 'None'".
+    """
+    for node in walk_actions(load(path)):
+        if "if" not in node:
+            continue
+        assert isinstance(node["if"], list), (
+            "`if:` must be a list of conditions, not a mapping — `then:` is a "
+            "sibling key of `if:`, not a key inside it"
+        )
+        assert "then" in node, "`if:` without a sibling `then:`"
+
+
+@pytest.mark.parametrize("path", BLUEPRINTS, ids=lambda p: p.name)
+def test_choose_branches_are_well_formed(path):
+    for node in walk_actions(load(path)):
+        if "choose" not in node:
+            continue
+        assert isinstance(node["choose"], list)
+        for option in node["choose"]:
+            assert "conditions" in option and "sequence" in option, (
+                "each choose option needs conditions and sequence"
+            )
+        # `default:` belongs beside `choose:`, not inside one of its options.
+        for option in node["choose"]:
+            assert "default" not in option, "`default:` is a sibling of `choose:`"
