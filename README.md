@@ -225,6 +225,12 @@ rotation, touch hit-testing and the image proxy's real behaviour;
 and everything marked *proven* there was measured rather than assumed.
 [`docs/plan.md`](docs/plan.md) has the fuller story.
 
+![The hifi-panel build on the same Waveshare 3.49 hardware, showing station artwork, track metadata and transport controls](docs/images/panel.jpg)
+
+That is `hifi-panel` on the same hardware, not this repo's build — the display
+half of this project is still the part that has not been written. It is here to
+show where the layout is heading.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
