@@ -28,6 +28,15 @@ inline std::string strip_origin(const std::string &url) {
   return url.substr(path);
 }
 
+// Safe indexing into a page's arrays.
+//
+// Home Assistant sends a short array on the last page — three items rather
+// than five — so the tile-painting code indexes past the end by design and
+// gets an empty string, which the caller renders as an empty tile.
+inline std::string nth(const std::vector<std::string> &values, size_t index) {
+  return index < values.size() ? values[index] : std::string();
+}
+
 inline size_t count_non_empty(const std::vector<std::string> &values) {
   size_t n = 0;
   for (const auto &v : values)

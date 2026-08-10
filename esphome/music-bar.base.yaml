@@ -200,8 +200,8 @@ api:
             // flight, so a requested-URL variable can advance without anything
             // having changed. (docs/spec.md section 6)
             id(np_art_url) = music_bar::strip_origin(art_url);
-        # TODO(display): bind np_* to the LVGL widgets and point the now-playing
-        # image slot at art_url. Waits on the hifi-panel port.
+            id(np_art_url_full) = art_url;
+        - script.execute: paint_now_playing
 
     # One browser page: five items, in order. Artwork URLs may be empty, in
     # which case the panel draws its own monogram for that tile and no image
@@ -225,8 +225,7 @@ api:
             ESP_LOGD("music_bar", "page %d/%d, %u items, %u with artwork",
                      page + 1, total_pages, (unsigned) id(tile_names).size(),
                      (unsigned) music_bar::count_non_empty(id(tile_art_urls)));
-        # TODO(display): write the five tile labels, set monogram colours from
-        # music_bar::monogram_bg_hex(), and point each image slot at its URL.
+        - script.execute: paint_tiles
 
 ota:
   - platform: esphome
@@ -281,6 +280,11 @@ globals:
     type: bool
     restore_value: false
     initial_value: "false"
+  # page_setup is declared first, so it is what LVGL shows at boot.
+  - id: on_setup_page
+    type: bool
+    restore_value: false
+    initial_value: "true"
 
   # Now Playing, as pushed by Home Assistant.
   - id: np_title
@@ -295,7 +299,18 @@ globals:
   - id: np_state
     type: std::string
     restore_value: false
+  # Two forms of the same thing: what to fetch, and what to compare.
+  # Music Assistant answers on two ports and Home Assistant alternates
+  # entity_picture between them, so the same artwork arrives as two different
+  # URLs seconds apart. Comparing whole URLs treats those as a change and
+  # refetches artwork already on screen.
   - id: np_art_url
+    type: std::string
+    restore_value: false
+  - id: np_art_url_full
+    type: std::string
+    restore_value: false
+  - id: shown_art_url
     type: std::string
     restore_value: false
 
@@ -474,6 +489,172 @@ script:
             device: !lambda "return App.get_name();"
             index: !lambda "return id(pending_index);"
 
+
+  # Repaint the five browser tiles from the globals the `page` action filled.
+  #
+  # Artwork is not used yet: every tile draws a monogram, which needs no image
+  # slot, no buffer and no fetch. That is deliberate — see docs/spec.md
+  # section 4 for why the browser is proven on monograms before an image slot
+  # is ever handed a URL.
+  - id: paint_tiles
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: "return 0 < (int) id(tile_names).size();"
+          then:
+            - lvgl.widget.show: tile_0
+            - lvgl.label.update:
+                id: tile_0_name
+                text: !lambda "return music_bar::nth(id(tile_names), 0);"
+            - lvgl.label.update:
+                id: tile_0_initials
+                text: !lambda |-
+                  return music_bar::initials(music_bar::nth(id(tile_names), 0));
+            - lvgl.widget.update:
+                id: tile_0_mat
+                bg_color: !lambda |-
+                  return lv_color_hex(music_bar::monogram_bg_hex(music_bar::nth(id(tile_names), 0)));
+            - lvgl.label.update:
+                id: tile_0_initials
+                text_color: !lambda |-
+                  return lv_color_hex(music_bar::monogram_fg_hex(music_bar::nth(id(tile_names), 0)));
+          else:
+            - lvgl.widget.hide: tile_0
+      - if:
+          condition:
+            lambda: "return 1 < (int) id(tile_names).size();"
+          then:
+            - lvgl.widget.show: tile_1
+            - lvgl.label.update:
+                id: tile_1_name
+                text: !lambda "return music_bar::nth(id(tile_names), 1);"
+            - lvgl.label.update:
+                id: tile_1_initials
+                text: !lambda |-
+                  return music_bar::initials(music_bar::nth(id(tile_names), 1));
+            - lvgl.widget.update:
+                id: tile_1_mat
+                bg_color: !lambda |-
+                  return lv_color_hex(music_bar::monogram_bg_hex(music_bar::nth(id(tile_names), 1)));
+            - lvgl.label.update:
+                id: tile_1_initials
+                text_color: !lambda |-
+                  return lv_color_hex(music_bar::monogram_fg_hex(music_bar::nth(id(tile_names), 1)));
+          else:
+            - lvgl.widget.hide: tile_1
+      - if:
+          condition:
+            lambda: "return 2 < (int) id(tile_names).size();"
+          then:
+            - lvgl.widget.show: tile_2
+            - lvgl.label.update:
+                id: tile_2_name
+                text: !lambda "return music_bar::nth(id(tile_names), 2);"
+            - lvgl.label.update:
+                id: tile_2_initials
+                text: !lambda |-
+                  return music_bar::initials(music_bar::nth(id(tile_names), 2));
+            - lvgl.widget.update:
+                id: tile_2_mat
+                bg_color: !lambda |-
+                  return lv_color_hex(music_bar::monogram_bg_hex(music_bar::nth(id(tile_names), 2)));
+            - lvgl.label.update:
+                id: tile_2_initials
+                text_color: !lambda |-
+                  return lv_color_hex(music_bar::monogram_fg_hex(music_bar::nth(id(tile_names), 2)));
+          else:
+            - lvgl.widget.hide: tile_2
+      - if:
+          condition:
+            lambda: "return 3 < (int) id(tile_names).size();"
+          then:
+            - lvgl.widget.show: tile_3
+            - lvgl.label.update:
+                id: tile_3_name
+                text: !lambda "return music_bar::nth(id(tile_names), 3);"
+            - lvgl.label.update:
+                id: tile_3_initials
+                text: !lambda |-
+                  return music_bar::initials(music_bar::nth(id(tile_names), 3));
+            - lvgl.widget.update:
+                id: tile_3_mat
+                bg_color: !lambda |-
+                  return lv_color_hex(music_bar::monogram_bg_hex(music_bar::nth(id(tile_names), 3)));
+            - lvgl.label.update:
+                id: tile_3_initials
+                text_color: !lambda |-
+                  return lv_color_hex(music_bar::monogram_fg_hex(music_bar::nth(id(tile_names), 3)));
+          else:
+            - lvgl.widget.hide: tile_3
+      - if:
+          condition:
+            lambda: "return 4 < (int) id(tile_names).size();"
+          then:
+            - lvgl.widget.show: tile_4
+            - lvgl.label.update:
+                id: tile_4_name
+                text: !lambda "return music_bar::nth(id(tile_names), 4);"
+            - lvgl.label.update:
+                id: tile_4_initials
+                text: !lambda |-
+                  return music_bar::initials(music_bar::nth(id(tile_names), 4));
+            - lvgl.widget.update:
+                id: tile_4_mat
+                bg_color: !lambda |-
+                  return lv_color_hex(music_bar::monogram_bg_hex(music_bar::nth(id(tile_names), 4)));
+            - lvgl.label.update:
+                id: tile_4_initials
+                text_color: !lambda |-
+                  return lv_color_hex(music_bar::monogram_fg_hex(music_bar::nth(id(tile_names), 4)));
+          else:
+            - lvgl.widget.hide: tile_4
+
+  # Rewrite the Now Playing text and point the artwork slot at its URL.
+  - id: paint_now_playing
+    mode: restart
+    then:
+      - lvgl.label.update:
+          id: lbl_album
+          text: !lambda |-
+            if (!id(np_album).empty()) return id(np_album);
+            if (!id(np_artist).empty()) return id(np_artist);
+            return std::string("Music Bar");
+      - lvgl.label.update:
+          id: lbl_artist
+          text: !lambda "return id(np_artist);"
+      - lvgl.label.update:
+          id: lbl_title
+          text: !lambda "return id(np_title);"
+      - lvgl.label.update:
+          id: lbl_playpause
+          text: !lambda |-
+            return id(np_state) == "playing" ? std::string("\U000F03E4")
+                                             : std::string("\U000F040A");
+      # Only refetch when the artwork actually changed. Compared against what
+      # is on screen rather than what was last requested, because online_image
+      # silently drops an update while a download is in flight — so a
+      # requested-URL variable can advance without anything having changed.
+      - if:
+          condition:
+            lambda: |-
+              return !id(np_art_url).empty() && id(np_art_url) != id(shown_art_url);
+          then:
+            - lambda: 'id(shown_art_url) = id(np_art_url);'
+            - online_image.set_url:
+                id: art_png
+                url: !lambda "return id(np_art_url_full);"
+      - if:
+          condition:
+            lambda: "return id(np_art_url).empty();"
+          then:
+            - lambda: 'id(shown_art_url) = "";'
+            - lvgl.widget.update:
+                id: art_frame
+                bg_color: 0x111111
+            - lvgl.widget.hide: img_art
+            - lvgl.widget.show: lbl_art_ph
+
   - id: transport_play_pause
     mode: restart
     then:
@@ -505,17 +686,29 @@ script:
                     "import the music-bar blueprints.";
           }
           id(setup_state).publish_state(state);
-      # TODO(display): show this on the setup screen and switch to Now Playing
-      # once the state is Ready.
-
-# -- Buses ------------------------------------------------------------------
-# The IMU's own bus. The display and touch controller share a QSPI bus that
-# lands with the display config.
-i2c:
-  - id: i2c_imu
-    sda: ${imu_sda_pin}
-    scl: ${imu_scl_pin}
-    scan: false
+      - lvgl.label.update:
+          id: lbl_setup_state
+          text: !lambda "return id(setup_state).state;"
+      # Leave the setup screen the moment Home Assistant answers, and go back
+      # to it if the answer stops arriving — the screen is the only place a
+      # user without Home Assistant open can see what is wrong.
+      # Leave the setup screen once Home Assistant answers, and return to it if
+      # the answer stops arriving. Guarded by a flag we maintain rather than by
+      # asking LVGL which page is showing: this script also runs on API
+      # reconnects, and an unconditional page.show would drag someone off the
+      # browser mid-scroll.
+      - if:
+          condition:
+            lambda: "return id(ha_handshake_ok) && id(on_setup_page);"
+          then:
+            - lvgl.page.show: page_now_playing
+            - lambda: "id(on_setup_page) = false;"
+      - if:
+          condition:
+            lambda: "return !id(ha_handshake_ok) && !id(on_setup_page);"
+          then:
+            - lvgl.page.show: page_setup
+            - lambda: "id(on_setup_page) = true;"
 
 # -- Diagnostics ------------------------------------------------------------
 binary_sensor:
@@ -722,3 +915,576 @@ number:
 # from scratch. Until then this config builds, provisions, adopts and reports
 # its own setup state, which is what the blueprints and the artwork side are
 # developed against.
+
+# -- Fonts ------------------------------------------------------------------
+# A broad-ish Latin set: track and artist metadata is unpredictable and covers
+# English, French, German and Spanish routinely. Rarer scripts render as tofu
+# boxes, which is also why the monogram helper returns "" for a name with no
+# ASCII letters and the tile falls back to a media-type glyph.
+font:
+  - file: "gfonts://Roboto"
+    id: font_title
+    size: 28
+    glyphs: &ui_glyphs "0123456789 .,:;!?'\"-/&()%<>ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÑÒÓÔÕÖØÙÚÛÜÝàáâãäåæçèéêëìíîïñòóôõöøùúûüýÿ"
+  - file: "gfonts://Roboto"
+    id: font_body
+    size: 21
+    glyphs: *ui_glyphs
+  - file: "gfonts://Roboto"
+    id: font_sm
+    size: 15
+    glyphs: *ui_glyphs
+  - file: "gfonts://Roboto"
+    id: font_mono_lg
+    size: 34
+    glyphs: *ui_glyphs
+
+  # Material Design Icons. Codepoints verified against meta.json in
+  # Templarian/MaterialDesign-SVG — do not guess them, several sit one digit
+  # from an unrelated icon (dots-horizontal is F01D8, not F01D9).
+  - file:
+      type: web
+      url: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
+    id: font_icon
+    size: 30
+    glyphs:
+      - "\U000F040A"  # play
+      - "\U000F03E4"  # pause
+      - "\U000F04AE"  # skip-previous
+      - "\U000F04AD"  # skip-next
+      - "\U000F01D8"  # dots-horizontal
+      - "\U000F0141"  # chevron-left
+      - "\U000F0142"  # chevron-right
+      - "\U000F0439"  # radio
+      - "\U000F0B47"  # playlist-music
+      - "\U000F00E2"  # album
+  - file:
+      type: web
+      url: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
+    id: font_icon_xl
+    size: 64
+    glyphs:
+      - "\U000F075A"  # music, the now-playing art placeholder
+
+# Needed by online_image. Most artwork comes from Music Assistant over plain
+# HTTP on the LAN, but a Spotify Connect stream has no proxy path and its
+# artwork is fetched straight from Spotify's CDN over HTTPS, so TLS has to be
+# available. verify_ssl would pull in a CA bundle and the memory to validate
+# against it; these are public, read-only album covers on a device that only
+# ever fetches a URL Home Assistant handed it, so skipping validation is the
+# cheaper trade.
+http_request:
+  id: http_request_main
+  useragent: esphome/music-bar
+  timeout: 8s
+  verify_ssl: false
+
+# -- Now Playing artwork ----------------------------------------------------
+# One runtime image, fed a pre-bounded URL by the blueprint. The browser tiles
+# deliberately use no image slots yet — they draw monograms — so this is the
+# only decode the panel ever does. See docs/spec.md section 4.
+#
+# The URL below is a compile-time placeholder; the real one arrives at runtime.
+image:
+  - platform: online_image
+    id: art_png
+    url: "http://127.0.0.1/placeholder.png"
+    format: PNG
+    type: RGB565
+    resize: 152x152
+    update_interval: never
+    buffer_size: 16384
+    # byte_order is deliberately left at its default. lv_conf.h sets
+    # LV_COLOR_16_SWAP 1, which looks like it demands big-endian images and
+    # does not: LVGL uses that macro in exactly one place, swapping on the way
+    # *out* to the panel long after image data is read. Setting BIG_ENDIAN here
+    # renders teal as orange. Pure black-and-white images are invariant under
+    # the swap, so never check this with a monochrome logo.
+    #
+    # ALPHA_CHANNEL because many station logos are transparent PNGs, and the
+    # default opaque path paints whatever undefined RGB sits under transparent
+    # pixels. Music Assistant cannot flatten them for us — its proxy handler
+    # never passes the flatten argument.
+    transparency: ALPHA_CHANNEL
+    on_download_finished:
+      - lambda: 'ESP_LOGI("music_bar", "art: decoded (cached=%d)", (int) cached);'
+      # Re-bind, or the widget stays permanently blank. lv_image_set_src()
+      # caches the result of lv_image_decoder_get_info(), and at setup time the
+      # buffer is still null so that call fails and LVGL clears the source.
+      # Nothing in online_image invalidates LVGL's cache, so the only way to
+      # pick up the decoded buffer is to set the source again here.
+      - lvgl.image.update:
+          id: img_art
+          src: art_png
+      - lvgl.widget.update:
+          id: art_frame
+          bg_color: 0x808080
+      - lvgl.widget.hide: lbl_art_ph
+      - lvgl.widget.show: img_art
+    on_error:
+      - lambda: 'ESP_LOGW("music_bar", "art: download or decode failed");'
+      - lvgl.widget.update:
+          id: art_frame
+          bg_color: 0x111111
+      - lvgl.widget.hide: img_art
+      - lvgl.widget.show: lbl_art_ph
+
+# -- The screen -------------------------------------------------------------
+# Geometry assumes 640x172. A device profile with a different screen needs its
+# own layout; the coordinates below are measured against this one.
+lvgl:
+  displays:
+    - lcd
+  # Global rotation, with display and touchscreen left native. Current ESPHome
+  # rotates LVGL hit-testing internally to match; the raw touchscreen on_touch
+  # trigger still reports un-rotated coordinates, which is expected.
+  rotation: 90°
+  # The AXS15231 only does partial draws on 8-pixel boundaries and 172 is not
+  # divisible by 8, so partial redraws leave stale pixels behind.
+  full_refresh: true
+  # One accent for every button on every page, rather than repeating styles on
+  # each of them. Per-widget overrides still work.
+  theme:
+    button:
+      bg_color: 0x0095FF
+      bg_opa: COVER
+      border_width: 0
+      radius: 8
+      text_color: 0xFFFFFF
+      pad_all: 0
+      pressed:
+        bg_color: 0x006FBF
+
+  pages:
+    # ═══════════════════════ Setup ═══════════════════════
+    # Shown until Home Assistant answers the handshake. The panel has a screen,
+    # so it says what is wrong with its own install instead of looking broken.
+    - id: page_setup
+      bg_color: 0x000000
+      scrollable: false
+      scrollbar_mode: "OFF"
+      widgets:
+        - label:
+            id: lbl_setup_title
+            x: 20
+            y: 18
+            width: 600
+            text: "Music Bar"
+            text_font: font_title
+            text_color: 0xFFFFFF
+        - label:
+            id: lbl_setup_state
+            x: 20
+            y: 60
+            width: 600
+            height: 100
+            text: "Starting…"
+            text_font: font_sm
+            text_color: 0xB0B0B0
+            long_mode: WRAP
+
+    # ═══════════════════════ Now Playing ═══════════════════════
+    - id: page_now_playing
+      bg_color: 0x000000
+      scrollable: false
+      scrollbar_mode: "OFF"
+      widgets:
+        - obj:
+            id: art_frame
+            x: 8
+            y: 10
+            width: 152
+            height: 152
+            bg_color: 0x111111
+            bg_opa: COVER
+            radius: 6
+            border_width: 0
+            pad_all: 0
+            scrollable: false
+            scrollbar_mode: "OFF"
+            widgets:
+              - label:
+                  id: lbl_art_ph
+                  align: CENTER
+                  text: "\U000F075A"
+                  text_font: font_icon_xl
+                  text_color: 0x333333
+              - image:
+                  id: img_art
+                  align: CENTER
+                  src: art_png
+                  hidden: true
+
+        - label:
+            id: lbl_album
+            x: 172
+            y: 10
+            width: 410
+            height: 34
+            text_font: font_title
+            text_color: 0xFFFFFF
+            long_mode: SCROLL_CIRCULAR
+            text: "Music Bar"
+        - label:
+            id: lbl_artist
+            x: 172
+            y: 47
+            width: 410
+            height: 26
+            text_font: font_body
+            text_color: 0xFFFFFF
+            long_mode: SCROLL_CIRCULAR
+            text: ""
+        - label:
+            id: lbl_title
+            x: 172
+            y: 76
+            width: 410
+            height: 26
+            text_font: font_body
+            text_color: 0xB0B0B0
+            long_mode: SCROLL_CIRCULAR
+            text: ""
+
+        # Prev and next move between favorites, not tracks. That is the whole
+        # point of the bar — see docs/spec.md section 2.
+        - button:
+            id: btn_prev
+            x: 172
+            y: 108
+            width: 88
+            height: 58
+            on_press:
+              - script.execute:
+                  id: favorite_step
+                  delta: -1
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "\U000F04AE"
+                  text_font: font_icon
+        - button:
+            id: btn_playpause
+            x: 268
+            y: 108
+            width: 88
+            height: 58
+            on_press:
+              - script.execute: transport_play_pause
+            widgets:
+              - label:
+                  id: lbl_playpause
+                  align: CENTER
+                  text: "\U000F040A"
+                  text_font: font_icon
+        - button:
+            id: btn_next
+            x: 364
+            y: 108
+            width: 88
+            height: 58
+            on_press:
+              - script.execute:
+                  id: favorite_step
+                  delta: 1
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "\U000F04AD"
+                  text_font: font_icon
+
+        - button:
+            id: btn_to_browser
+            x: 590
+            y: 0
+            width: 50
+            height: 172
+            radius: 0
+            on_press:
+              - lvgl.page.show: page_browser
+              - script.execute:
+                  id: request_page
+                  page: 0
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "\U000F01D8"
+                  text_font: font_icon
+
+    # ═══════════════════════ Browser ═══════════════════════
+    # Exactly one browser page holding five tiles. LVGL widgets are created at
+    # compile time and cannot be added at runtime, so paging means rewriting
+    # these five rather than navigating between pre-built pages — which is what
+    # keeps the browser independent of how many favorites you have.
+    - id: page_browser
+      bg_color: 0x000000
+      scrollable: false
+      scrollbar_mode: "OFF"
+      widgets:
+        - button:
+            id: btn_page_prev
+            x: 0
+            y: 0
+            width: 46
+            height: 172
+            radius: 0
+            on_press:
+              - script.execute:
+                  id: request_page
+                  page: !lambda "return id(page_index) - 1;"
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "\U000F0141"
+                  text_font: font_icon
+        - button:
+            id: btn_page_next
+            x: 594
+            y: 0
+            width: 46
+            height: 172
+            radius: 0
+            on_press:
+              - script.execute:
+                  id: request_page
+                  page: !lambda "return id(page_index) + 1;"
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "\U000F0142"
+                  text_font: font_icon
+        - button:
+            id: tile_0
+            x: 50
+            y: 4
+            width: 104
+            height: 164
+            bg_color: 0x1E1E1E
+            radius: 8
+            on_press:
+              - script.execute:
+                  id: play_tile
+                  index: 0
+            widgets:
+              # The monogram mat. A plain `obj` nested in a button swallows
+              # presses — LVGL sets LV_OBJ_FLAG_CLICKABLE on obj by default,
+              # while label and image both clear it — so this must be
+              # explicitly unclickable or it eats every tap on the artwork.
+              - obj:
+                  id: tile_0_mat
+                  align: TOP_MID
+                  y: 6
+                  width: 88
+                  height: 88
+                  bg_color: 0x333333
+                  bg_opa: COVER
+                  radius: 6
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  clickable: false
+                  widgets:
+                    - label:
+                        id: tile_0_initials
+                        align: CENTER
+                        text: ""
+                        text_font: font_mono_lg
+                        text_color: 0xFFFFFF
+              - label:
+                  id: tile_0_name
+                  align: TOP_MID
+                  y: 98
+                  width: 98
+                  text: ""
+                  text_font: font_sm
+                  text_color: 0xFFFFFF
+                  long_mode: WRAP
+                  text_align: CENTER
+        - button:
+            id: tile_1
+            x: 159
+            y: 4
+            width: 104
+            height: 164
+            bg_color: 0x1E1E1E
+            radius: 8
+            on_press:
+              - script.execute:
+                  id: play_tile
+                  index: 1
+            widgets:
+              # The monogram mat. A plain `obj` nested in a button swallows
+              # presses — LVGL sets LV_OBJ_FLAG_CLICKABLE on obj by default,
+              # while label and image both clear it — so this must be
+              # explicitly unclickable or it eats every tap on the artwork.
+              - obj:
+                  id: tile_1_mat
+                  align: TOP_MID
+                  y: 6
+                  width: 88
+                  height: 88
+                  bg_color: 0x333333
+                  bg_opa: COVER
+                  radius: 6
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  clickable: false
+                  widgets:
+                    - label:
+                        id: tile_1_initials
+                        align: CENTER
+                        text: ""
+                        text_font: font_mono_lg
+                        text_color: 0xFFFFFF
+              - label:
+                  id: tile_1_name
+                  align: TOP_MID
+                  y: 98
+                  width: 98
+                  text: ""
+                  text_font: font_sm
+                  text_color: 0xFFFFFF
+                  long_mode: WRAP
+                  text_align: CENTER
+        - button:
+            id: tile_2
+            x: 268
+            y: 4
+            width: 104
+            height: 164
+            bg_color: 0x1E1E1E
+            radius: 8
+            on_press:
+              - script.execute:
+                  id: play_tile
+                  index: 2
+            widgets:
+              # The monogram mat. A plain `obj` nested in a button swallows
+              # presses — LVGL sets LV_OBJ_FLAG_CLICKABLE on obj by default,
+              # while label and image both clear it — so this must be
+              # explicitly unclickable or it eats every tap on the artwork.
+              - obj:
+                  id: tile_2_mat
+                  align: TOP_MID
+                  y: 6
+                  width: 88
+                  height: 88
+                  bg_color: 0x333333
+                  bg_opa: COVER
+                  radius: 6
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  clickable: false
+                  widgets:
+                    - label:
+                        id: tile_2_initials
+                        align: CENTER
+                        text: ""
+                        text_font: font_mono_lg
+                        text_color: 0xFFFFFF
+              - label:
+                  id: tile_2_name
+                  align: TOP_MID
+                  y: 98
+                  width: 98
+                  text: ""
+                  text_font: font_sm
+                  text_color: 0xFFFFFF
+                  long_mode: WRAP
+                  text_align: CENTER
+        - button:
+            id: tile_3
+            x: 377
+            y: 4
+            width: 104
+            height: 164
+            bg_color: 0x1E1E1E
+            radius: 8
+            on_press:
+              - script.execute:
+                  id: play_tile
+                  index: 3
+            widgets:
+              # The monogram mat. A plain `obj` nested in a button swallows
+              # presses — LVGL sets LV_OBJ_FLAG_CLICKABLE on obj by default,
+              # while label and image both clear it — so this must be
+              # explicitly unclickable or it eats every tap on the artwork.
+              - obj:
+                  id: tile_3_mat
+                  align: TOP_MID
+                  y: 6
+                  width: 88
+                  height: 88
+                  bg_color: 0x333333
+                  bg_opa: COVER
+                  radius: 6
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  clickable: false
+                  widgets:
+                    - label:
+                        id: tile_3_initials
+                        align: CENTER
+                        text: ""
+                        text_font: font_mono_lg
+                        text_color: 0xFFFFFF
+              - label:
+                  id: tile_3_name
+                  align: TOP_MID
+                  y: 98
+                  width: 98
+                  text: ""
+                  text_font: font_sm
+                  text_color: 0xFFFFFF
+                  long_mode: WRAP
+                  text_align: CENTER
+        - button:
+            id: tile_4
+            x: 486
+            y: 4
+            width: 104
+            height: 164
+            bg_color: 0x1E1E1E
+            radius: 8
+            on_press:
+              - script.execute:
+                  id: play_tile
+                  index: 4
+            widgets:
+              # The monogram mat. A plain `obj` nested in a button swallows
+              # presses — LVGL sets LV_OBJ_FLAG_CLICKABLE on obj by default,
+              # while label and image both clear it — so this must be
+              # explicitly unclickable or it eats every tap on the artwork.
+              - obj:
+                  id: tile_4_mat
+                  align: TOP_MID
+                  y: 6
+                  width: 88
+                  height: 88
+                  bg_color: 0x333333
+                  bg_opa: COVER
+                  radius: 6
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  clickable: false
+                  widgets:
+                    - label:
+                        id: tile_4_initials
+                        align: CENTER
+                        text: ""
+                        text_font: font_mono_lg
+                        text_color: 0xFFFFFF
+              - label:
+                  id: tile_4_name
+                  align: TOP_MID
+                  y: 98
+                  width: 98
+                  text: ""
+                  text_font: font_sm
+                  text_color: 0xFFFFFF
+                  long_mode: WRAP
+                  text_align: CENTER

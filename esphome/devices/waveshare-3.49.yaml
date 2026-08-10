@@ -43,23 +43,112 @@ substitutions:
   # Change it here, reflash, and rerun the normalizer with --force.
   tile_px: "84"
 
+  # Pin map, from Waveshare's own example
+  # (Examples/Arduino/09_LVGL_V8_Test/user_config.h in
+  # waveshareteam/ESP32-S3-Touch-LCD-3.49), and confirmed by the hifi-panel
+  # build running on this hardware.
+  #
+  # Display and touch are one chip (AXS15231B) but reached two ways: the panel
+  # over QSPI, the touch controller over I2C.
+  qspi_clk_pin:  GPIO10
+  qspi_d0_pin:   GPIO11
+  qspi_d1_pin:   GPIO12
+  qspi_d2_pin:   GPIO13
+  qspi_d3_pin:   GPIO14
+  lcd_cs_pin:    GPIO9
+  lcd_reset_pin: GPIO21
+  backlight_pin: GPIO8
+
+  touch_sda_pin: GPIO17
+  touch_scl_pin: GPIO18
+
   # The QMI8658 IMU sits on its own I2C bus, which is why an I2C scan of the
-  # touch bus never finds it.
+  # touch bus never finds it. A PCF85063 RTC shares it at 0x51, unused here.
   imu_sda_pin: GPIO47
   imu_scl_pin: GPIO48
 
 packages:
   music_bar: !include ../music-bar.base.yaml
 
-# -- Display and touch ------------------------------------------------------
-# TODO: AXS15231B QSPI display + touchscreen, and the LVGL layout built on it.
-# Ported from the hifi-panel build on the ESPHome host. This is the only part of
-# the project that is genuinely board-specific and not yet written; see
-# docs/plan.md phase 1.
-#
-# Until it lands the panel shows random noise, because nothing ever initialises
-# the LCD and it powers up holding whatever was in its memory. It looks broken
-# and is not: check the Setup Status entity rather than the screen.
-#
-# Blanking it in the meantime needs the backlight pin, which is one of the
-# things the hifi-panel config has and this does not.
+# -- Display, touch and backlight -------------------------------------------
+# Ported from the hifi-panel build that ran on this same hardware, with its
+# findings kept as comments — they were expensive to learn.
+
+# QSPI, for the panel.
+spi:
+  id: quad_spi
+  type: quad
+  clk_pin: ${qspi_clk_pin}
+  # Block form, not [a, b, c]: a ${substitution} inside a YAML flow sequence
+  # trips the parser on its opening brace.
+  data_pins:
+    - ${qspi_d0_pin}
+    - ${qspi_d1_pin}
+    - ${qspi_d2_pin}
+    - ${qspi_d3_pin}
+
+i2c:
+  # Touch controller.
+  - id: bus_touch
+    sda: ${touch_sda_pin}
+    scl: ${touch_scl_pin}
+    frequency: 400kHz
+    scan: false
+  # IMU and RTC. 100kHz rather than 400kHz: nothing here is rate-sensitive and
+  # the slower clock is more forgiving of the board's trace lengths.
+  - id: bus_aux
+    sda: ${imu_sda_pin}
+    scl: ${imu_scl_pin}
+    frequency: 100kHz
+    scan: false
+
+# Native 172x640 portrait. Deliberately no `rotation:` here — LVGL rotates
+# globally, which is the only arrangement where touch hit-testing follows.
+display:
+  - platform: qspi_dbi
+    id: lcd
+    model: AXS15231
+    spi_id: quad_spi
+    cs_pin: ${lcd_cs_pin}
+    reset_pin: ${lcd_reset_pin}
+    data_rate: 40MHz
+    spi_mode: MODE0
+    dimensions:
+      width: ${display_height}
+      height: ${display_width}
+    color_order: rgb
+    invert_colors: false
+    # The AXS15231 only does partial draws on 8-pixel boundaries and 172 is not
+    # divisible by 8, which leaves stale pixels behind on a partial redraw.
+    draw_rounding: 16
+    update_interval: never
+    auto_clear_enabled: false
+
+# No `transform` for rotation — LVGL's global rotation handles hit-testing for
+# widgets. swap_xy/mirror_y below are a *hardware* fact and independent of it:
+# this chip's "x" channel is physically the long 640 axis. Without the swap,
+# touch x is normalised against the wrong maximum and clamps near it, which
+# looks like every press landing at the right-hand edge.
+touchscreen:
+  - platform: axs15231
+    id: touch
+    i2c_id: bus_touch
+    display: lcd
+    transform:
+      swap_xy: true
+      mirror_y: true
+
+output:
+  - platform: ledc
+    pin: ${backlight_pin}
+    id: backlight_pwm
+    frequency: 5000Hz
+    inverted: true
+
+light:
+  - platform: monochromatic
+    id: backlight
+    name: "Backlight"
+    output: backlight_pwm
+    restore_mode: ALWAYS_ON
+    default_transition_length: 200ms

@@ -28,9 +28,14 @@ YAML     = $(DEVICE).yaml
 PORT ?=
 DEVICE_ARG = $(if $(PORT),--device $(PORT),)
 FACTORY_YAML := music-bar.factory.factory.yaml
-# probe-image-slots.yaml is deliberately absent: online_image needs a display:
-# block, which lands with the AXS15231B port. Add it here at the same time.
-ALL_CONFIGS := music-bar.base.yaml music-bar.example.yaml music-bar.factory.yaml \
+# music-bar.base.yaml is deliberately absent. It carries the LVGL layout, which
+# references the display the device profile defines, so it no longer validates
+# on its own — it is only ever built through a profile. Every config below
+# includes it, so it is still covered.
+#
+# probe-image-slots.yaml is absent for the opposite reason: it predates the
+# display and needs rewriting against the real one before it can run.
+ALL_CONFIGS := music-bar.example.yaml music-bar.factory.yaml \
                music-bar.factory.factory.yaml
 
 .PHONY: version config compile run logs clean factory-config factory factory-run \

@@ -37,15 +37,8 @@ asking for a device, and pull requests adding one, are both welcome.
 | Artwork normalizer | **Built** — tested against a live library |
 | Device-drawn monograms (the shared hash) | **Built** — device and script verified to agree |
 | Blueprints (favorites, prev/next, now playing) | **Built** — validated offline; the round trip is not yet confirmed against a live Home Assistant |
-| Display, LVGL layout, tiles, transport | **Not written** — waiting on the prior `hifi-panel` build |
+| Display, touch, backlight, LVGL layout | **Built** — ported from `hifi-panel`; compiles and runs, still being checked on glass |
 | Artwork integration and playlist resume | **Not written** |
-
-> **The screen shows random noise, and that is expected.** This firmware does
-> not configure the display yet, so the panel never initialises the LCD and it
-> shows whatever was in its memory at power-on. The device is working — it
-> provisions, adopts, reports diagnostics and drives playback from its Home
-> Assistant entities. Only the screen is missing. Check **Setup Status** rather
-> than the glass.
 
 Measured on the reference panel rather than assumed: PSRAM comes up as 8192 KB
 octal at 80MHz, and the factory image uses 42.5% of internal RAM with no
