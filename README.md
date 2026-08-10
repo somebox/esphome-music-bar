@@ -147,6 +147,8 @@ entities — **Next Favorite**, **Play Pause**, **Next Page**, **Play Selected
 Tile** — so the whole thing can be flashed, adopted and driven from its device
 page with a blank screen.
 
+![The panel's device page in Home Assistant: transport controls, the configuration buttons, and the diagnostic sensors reporting device profile and tile size](docs/images/home-assistant.png)
+
 ### The artwork normalizer
 
 Optional. Run it anywhere that can reach Music Assistant and write where Home
