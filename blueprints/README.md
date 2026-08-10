@@ -21,6 +21,42 @@ Create **both**. They send in opposite directions and neither is much use
 alone: without Now Playing the screen stays blank, and without Favorites the
 buttons do nothing and the panel reports that Home Assistant never answered.
 
+## One automation each
+
+Create **exactly one** automation from each blueprint, per panel.
+
+Every automation created from a blueprint fires on the same triggers. Two Now
+Playing automations both push text to the same panel, a moment apart; if they
+are configured with different players, the panel shows whichever replied last
+and looks like it is displaying stale or random information. Two Favorites
+automations answer every request twice.
+
+This is easy to do by accident, because saving a blueprint configuration again
+after changing a field creates a *new* automation rather than editing the old
+one unless you reopen the existing automation to edit it.
+
+To check: Settings → Automations, filter by blueprint. The blueprint page also
+shows how many automations use it — anything above one per panel is a duplicate.
+
+## Which player to follow
+
+The Favorites automation must use a **Music Assistant** player: it reads your
+favorites and starts playback through Music Assistant, and its library call is
+resolved from that entity's integration.
+
+Now Playing can follow either:
+
+- the **same Music Assistant player** — normal, and what the panel's own tiles
+  drive; or
+- the **speaker's own entity** — if you want the panel to show everything the
+  speaker plays, including Bluetooth, line-in or Spotify Connect, which Music
+  Assistant knows nothing about.
+
+A speaker usually appears twice in Home Assistant, once per integration. If the
+panel shows nothing while music is definitely playing, it is usually because
+playback was started on one of those entities and the panel is watching the
+other.
+
 ## What you need to know
 
 **The panel's device name.** Now Playing asks for it, because it is triggered by

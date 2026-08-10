@@ -13,6 +13,12 @@ blueprint:
     This blueprint only sends; that one answers.
 
 
+    **Create exactly one automation from this blueprint per panel.** Every
+    automation from it fires on the same triggers and pushes to the same panel,
+    so a second one configured differently overwrites the first's text a moment
+    later — which looks like the panel showing stale or wrong information.
+
+
     **You need the panel's device name**, which is its ESPHome hostname rather
     than its friendly name — something like `music-bar-a1b2c3`, since the
     firmware appends the MAC so several unflashed panels do not collide. Find it
@@ -23,13 +29,21 @@ blueprint:
     min_version: 2024.10.0
   input:
     ma_player:
-      name: Music Assistant player
-      description: The player this panel follows.
+      name: Player to follow
+      description: >-
+        Normally your Music Assistant player — the same one you chose in the
+        Favorites automation, so the panel shows what its own tiles started.
+
+
+        You can instead pick the speaker's own entity if you want the panel to
+        show everything the speaker plays, including sources Music Assistant
+        knows nothing about: Bluetooth, line-in, or Spotify Connect. The
+        trade-off is that Music Assistant's artwork proxy is not involved, so
+        artwork may be missing or unbounded in size.
       selector:
         entity:
           filter:
             - domain: media_player
-              integration: music_assistant
     device_name:
       name: Panel device name
       description: >-

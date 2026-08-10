@@ -20,6 +20,12 @@ blueprint:
     Pair with **Music Bar — Now Playing**, which sends the other direction.
 
 
+    **Create exactly one automation from this blueprint per panel.** Every
+    automation from it answers the same events, so duplicates answer the panel
+    twice — with different players if they are configured differently — and the
+    panel shows whichever replied last.
+
+
     Artwork is not sent by this blueprint — tiles show the panel's own
     monograms, which look deliberate rather than broken. Install the artwork
     integration to replace them with real images.
