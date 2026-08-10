@@ -461,6 +461,9 @@ script:
                   # and next continue from the pick rather than from wherever
                   # the cursor had got to.
                   index: !lambda "return id(page_index) * 5 + id(pending_index);"
+            # Back to Now Playing so the choice is visible. Playing something
+            # and being left staring at the grid reads as if the tap missed.
+            - lvgl.page.show: page_now_playing
           else:
             - lambda: 'ESP_LOGW("music_bar", "tile %d has no URI", index);'
 
@@ -499,6 +502,13 @@ script:
   - id: paint_tiles
     mode: restart
     then:
+      - if:
+          condition:
+            lambda: "return id(favorite_total) <= 0;"
+          then:
+            - lvgl.widget.show: lbl_browser_empty
+          else:
+            - lvgl.widget.hide: lbl_browser_empty
       - if:
           condition:
             lambda: "return 0 < (int) id(tile_names).size();"
@@ -1221,6 +1231,10 @@ lvgl:
       scrollable: false
       scrollbar_mode: "OFF"
       widgets:
+        # Left chevron pages back, and on the first page it is the way out.
+        # Without that the browser is a room with no door: the only other exit
+        # is playing something, which is not what someone who opened it to look
+        # around wants to have to do.
         - button:
             id: btn_page_prev
             x: 0
@@ -1229,9 +1243,15 @@ lvgl:
             height: 172
             radius: 0
             on_press:
-              - script.execute:
-                  id: request_page
-                  page: !lambda "return id(page_index) - 1;"
+              - if:
+                  condition:
+                    lambda: "return id(page_index) <= 0;"
+                  then:
+                    - lvgl.page.show: page_now_playing
+                  else:
+                    - script.execute:
+                        id: request_page
+                        page: !lambda "return id(page_index) - 1;"
             widgets:
               - label:
                   align: CENTER
@@ -1253,6 +1273,23 @@ lvgl:
                   align: CENTER
                   text: "\U000F0142"
                   text_font: font_icon
+        # Shown instead of the grid when there is nothing to browse. Favorites
+        # are the whole content model, so a user with none gets an empty panel
+        # and deserves to be told why rather than left looking at five blank
+        # rectangles. See docs/spec.md section 5.
+        - label:
+            id: lbl_browser_empty
+            x: 60
+            y: 50
+            width: 520
+            height: 80
+            hidden: true
+            text: "Nothing favorited yet.\n\nMark a station or playlist as a favorite in Music Assistant and it appears here."
+            text_font: font_sm
+            text_color: 0xB0B0B0
+            long_mode: WRAP
+            text_align: CENTER
+
         - button:
             id: tile_0
             x: 50
