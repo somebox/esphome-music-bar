@@ -42,7 +42,7 @@ substitutions:
 
   # How long to wait for Home Assistant to answer the boot handshake before
   # deciding it is not going to.
-  handshake_timeout: "10s"
+  handshake_timeout: "2s"
 
   # ── Device-specific, and set by the device profile ──────────────────────
   #
@@ -120,6 +120,23 @@ logger:
 api:
   id: api_server
   encryption:
+
+  # The handshake starts here, not on Wi-Fi connect.
+  #
+  # Wi-Fi comes up several seconds before Home Assistant's API client attaches,
+  # and an event fired in that window is discarded outright — the panel logs
+  # "Home Assistant event 'esphome.music_bar_hello' dropped; no client
+  # connected" and then waits forever for an answer to a question nobody heard.
+  # Observed on hardware; it made the panel look permanently unconfigured
+  # against a Home Assistant that was working fine.
+  #
+  # Firing on client connect also means a Home Assistant restart re-runs the
+  # handshake by itself, so the panel recovers without anyone pressing Retry.
+  on_client_connected:
+    - script.execute: ha_handshake
+
+  on_client_disconnected:
+    - script.execute: announce_setup_state
 
   # The contract with Home Assistant. Everything the panel shows arrives
   # through these three actions; the panel holds no content of its own.
@@ -224,9 +241,10 @@ wifi:
   id: wifi_component
   ap: {}
   domain: "${dns_domain}"
+  # Only updates what the panel is saying. The handshake waits for an API
+  # client to exist — see the note on api: on_client_connected above.
   on_connect:
     - script.execute: announce_setup_state
-    - script.execute: ha_handshake
   on_disconnect:
     - script.execute: announce_setup_state
 
@@ -345,16 +363,34 @@ globals:
 script:
   # Ask Home Assistant to prove it can call back. The blueprint answers by
   # calling the hello_ack action above. Nothing else is attempted until it does.
+  # Retries rather than asking once.
+  #
+  # There are two windows early in a connection where an event is discarded
+  # outright, and both were hit on hardware. Wi-Fi comes up before the API
+  # client attaches ("no client connected"), and the client attaches before it
+  # subscribes to actions ("client has not subscribed to actions (yet)").
+  # Neither is an error, and neither is something the panel can observe — so it
+  # asks again until it gets an answer rather than trying to detect readiness.
+  #
+  # Stops as soon as hello_ack arrives, so the usual case is one event.
   - id: ha_handshake
     mode: restart
     then:
       - lambda: |-
           id(ha_handshake_attempted) = true;
-      - homeassistant.event:
-          event: esphome.music_bar_hello
-          data:
-            device: !lambda "return App.get_name();"
-      - delay: ${handshake_timeout}
+      - repeat:
+          count: 6
+          then:
+            - if:
+                condition:
+                  lambda: "return !id(ha_handshake_ok);"
+                then:
+                  - homeassistant.event:
+                      event: esphome.music_bar_hello
+                      data:
+                        device: !lambda "return App.get_name();"
+                  - delay: ${handshake_timeout}
+      # Whatever happened, say so on screen and in the diagnostic sensor.
       - script.execute: announce_setup_state
 
   # Ask for a page of favorites. Wraps at both ends, so paging past the last

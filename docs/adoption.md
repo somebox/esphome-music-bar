@@ -85,11 +85,29 @@ call the panel makes — with nothing logged anywhere. Buttons visibly react and
 nothing happens. It is the single most likely thing to go wrong on a fresh
 install, and it looks exactly like a firmware bug.
 
-The panel cannot read that setting, but it can notice that nobody answered. On
-connect it calls `script.music_bar_hello`; the blueprint answers by calling the
-panel's `hello_ack` action. If no answer arrives within `handshake_timeout`, the
-panel says so — on its own screen, and in the **Setup Status** diagnostic sensor
-in Home Assistant.
+The panel cannot read that setting, but it can notice that nobody answered. It
+fires an `esphome.music_bar_hello` event; the blueprint answers by calling the
+panel's `hello_ack` action. If no answer arrives, the panel says so — on its own
+screen, and in the **Setup Status** diagnostic sensor in Home Assistant.
+
+It asks repeatedly rather than once, because there are two windows early in a
+connection where an event is discarded and neither is visible to the panel.
+Both were hit on hardware:
+
+- Wi-Fi connects several seconds before the API client attaches, and an event
+  fired then is dropped with *"no client connected"*. This is why the handshake
+  triggers on `api: on_client_connected` rather than on `wifi: on_connect`.
+- The client attaches before it subscribes to actions, and an event fired in
+  *that* window is dropped with *"client has not subscribed to actions (yet)"*.
+
+So the panel retries until it is answered, and stops as soon as it is. Firing on
+client connect also means a Home Assistant restart re-runs the handshake without
+anyone pressing Retry.
+
+**Importing the blueprints is not enough.** A blueprint is a template; nothing
+answers until an automation has been created from it. A panel that reports
+Home Assistant never answered, on an install where the toggle is on and the
+blueprints are imported, has almost always got no automation instance.
 
 There is a **Retry Home Assistant Handshake** button for checking after you flip
 the toggle, so this does not need a reboot to confirm.
