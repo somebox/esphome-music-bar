@@ -56,3 +56,10 @@ packages:
 # Ported from the hifi-panel build on the ESPHome host. This is the only part of
 # the project that is genuinely board-specific and not yet written; see
 # docs/plan.md phase 1.
+#
+# Until it lands the panel shows random noise, because nothing ever initialises
+# the LCD and it powers up holding whatever was in its memory. It looks broken
+# and is not: check the Setup Status entity rather than the screen.
+#
+# Blanking it in the meantime needs the backlight pin, which is one of the
+# things the hifi-panel config has and this does not.
