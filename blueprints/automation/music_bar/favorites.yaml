@@ -194,27 +194,110 @@ actions:
                     player entity, then save the Music Bar Favorites automation
                     again.
               - stop: "player is not a Music Assistant entity"
+          # One call per media type, each into its own response variable, and
+          # one template to join them.
+          #
+          # The obvious shape — accumulate into a variable inside a repeat — is
+          # what shipped first, and it silently produced a *string* instead of a
+          # list. Home Assistant then rejected the page with "expected a list
+          # for dictionary value @ data['names']", because a string sliced by
+          # page gives characters, and mapping `name` over characters yields
+          # Undefined entries that cannot be parsed back into a list. Building
+          # the whole list in a single template renders once and stays a list.
+          #
+          # Every type is fetched regardless of which are selected, which is
+          # cheaper than it looks: `favorite: true` means each call returns only
+          # favorites, and on the reference library that is single digits even
+          # where the type itself holds thousands of items. Selection and order
+          # are applied below, so the panel still shows what was asked for.
+          - action: music_assistant.get_library
+            continue_on_error: true
+            response_variable: lib_radio
+            data:
+              config_entry_id: "{{ entry }}"
+              media_type: radio
+              favorite: true
+              limit: "{{ per_type }}"
+              order_by: name
+          - action: music_assistant.get_library
+            continue_on_error: true
+            response_variable: lib_playlist
+            data:
+              config_entry_id: "{{ entry }}"
+              media_type: playlist
+              favorite: true
+              limit: "{{ per_type }}"
+              order_by: name
+          - action: music_assistant.get_library
+            continue_on_error: true
+            response_variable: lib_album
+            data:
+              config_entry_id: "{{ entry }}"
+              media_type: album
+              favorite: true
+              limit: "{{ per_type }}"
+              order_by: name
+          - action: music_assistant.get_library
+            continue_on_error: true
+            response_variable: lib_artist
+            data:
+              config_entry_id: "{{ entry }}"
+              media_type: artist
+              favorite: true
+              limit: "{{ per_type }}"
+              order_by: name
+          - action: music_assistant.get_library
+            continue_on_error: true
+            response_variable: lib_track
+            data:
+              config_entry_id: "{{ entry }}"
+              media_type: track
+              favorite: true
+              limit: "{{ per_type }}"
+              order_by: name
+
           - variables:
-              favorites: []
-          - repeat:
-              for_each: "{{ types }}"
-              sequence:
-                - action: music_assistant.get_library
-                  # One failing media type must not abort the branch: the panel
-                  # would then never be answered at all and would just sit
-                  # there. Fewer favorites is bad; silence is worse.
-                  continue_on_error: true
-                  data:
-                    config_entry_id: "{{ entry }}"
-                    media_type: "{{ repeat.item }}"
-                    favorite: true
-                    limit: "{{ per_type }}"
-                    order_by: name
-                  response_variable: library
-                - variables:
-                    # Accumulates across iterations: each pass sees the value
-                    # the previous one left.
-                    favorites: "{{ favorites + (library['items'] | default([], true)) }}"
+              # Two flat lists of strings, in the order the user listed their
+              # media types. Deliberately *not* a list of item dictionaries:
+              # Home Assistant parses a rendered template back into a value by
+              # evaluating it as a literal, and a Music Assistant item can carry
+              # values that do not survive that round trip. Plain strings always
+              # do. A call that failed leaves its variable undefined, which
+              # contributes nothing rather than breaking the join.
+              fav_names: >-
+                {% set responses = {
+                     'radio': lib_radio if lib_radio is defined else none,
+                     'playlist': lib_playlist if lib_playlist is defined else none,
+                     'album': lib_album if lib_album is defined else none,
+                     'artist': lib_artist if lib_artist is defined else none,
+                     'track': lib_track if lib_track is defined else none } %}
+                {%- set ns = namespace(out=[]) -%}
+                {%- for t in types -%}
+                  {%- set r = responses.get(t) -%}
+                  {%- if r -%}
+                    {%- for item in (r.get('items') or []) -%}
+                      {%- set ns.out = ns.out + [ item.get('name') | string ] -%}
+                    {%- endfor -%}
+                  {%- endif -%}
+                {%- endfor -%}
+                {{ ns.out }}
+              fav_uris: >-
+                {% set responses = {
+                     'radio': lib_radio if lib_radio is defined else none,
+                     'playlist': lib_playlist if lib_playlist is defined else none,
+                     'album': lib_album if lib_album is defined else none,
+                     'artist': lib_artist if lib_artist is defined else none,
+                     'track': lib_track if lib_track is defined else none } %}
+                {%- set ns = namespace(out=[]) -%}
+                {%- for t in types -%}
+                  {%- set r = responses.get(t) -%}
+                  {%- if r -%}
+                    {%- for item in (r.get('items') or []) -%}
+                      {%- set ns.out = ns.out + [ item.get('uri') | string ] -%}
+                    {%- endfor -%}
+                  {%- endif -%}
+                {%- endfor -%}
+                {{ ns.out }}
 
           - choose:
               # Prev / next. The panel keeps the cursor and does the
@@ -226,12 +309,12 @@ actions:
                   - variables:
                       wanted: "{{ trigger.event.data.index | int(0) }}"
                   - condition: template
-                    value_template: "{{ 0 <= wanted < (favorites | count) }}"
+                    value_template: "{{ 0 <= wanted < (fav_uris | count) }}"
                   - action: music_assistant.play_media
                     target:
                       entity_id: "{{ player }}"
                     data:
-                      media_id: "{{ favorites[wanted]['uri'] }}"
+                      media_id: "{{ fav_uris[wanted] }}"
                       enqueue: replace
                   - action: "esphome.{{ prefix }}_set_favorite_index"
                     data:
@@ -242,10 +325,10 @@ actions:
             # with no explanation.
             default:
               - variables:
-                  total: "{{ favorites | count }}"
+                  total: "{{ fav_names | count }}"
                   pages: "{{ [ (total / page_size) | round(0, 'ceil') | int, 1 ] | max }}"
                   index: "{{ trigger.event.data.page | int(0) }}"
-                  window: "{{ favorites[index * page_size : index * page_size + page_size] }}"
+                  first: "{{ index * page_size }}"
 
               # An empty library is a legitimate state — someone with nothing
               # favorited — but it is also exactly what a failing get_library
@@ -274,9 +357,9 @@ actions:
                   page: "{{ index }}"
                   total_pages: "{{ pages }}"
                   total_items: "{{ total }}"
-                  names: "{{ window | map(attribute='name') | list }}"
-                  uris: "{{ window | map(attribute='uri') | list }}"
+                  names: "{{ fav_names[first : first + page_size] }}"
+                  uris: "{{ fav_uris[first : first + page_size] }}"
                   # Empty until the artwork integration is installed. Not a
                   # failure: the panel draws its own monogram for a tile with
                   # no URL and never allocates an image buffer.
-                  art_urls: "{{ [''] * (window | count) }}"
+                  art_urls: "{{ [''] * (fav_names[first : first + page_size] | count) }}"

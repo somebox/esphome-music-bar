@@ -171,3 +171,24 @@ def test_choose_branches_are_well_formed(path):
         # `default:` belongs beside `choose:`, not inside one of its options.
         for option in node["choose"]:
             assert "default" not in option, "`default:` is a sibling of `choose:`"
+
+
+def test_page_data_is_built_from_flat_string_lists():
+    """Values sent to the panel must survive Home Assistant's template
+    round trip.
+
+    A rendered template is parsed back into a value by evaluating it as a
+    literal. Lists of plain strings always survive that; lists of Music
+    Assistant item dictionaries need not, and a value that fails to parse stays
+    a string — which the panel's service schema rejects with "expected a list
+    for dictionary value @ data['names']", naming the symptom and not the cause.
+
+    So the blueprint builds flat lists of strings and slices them, rather than
+    carrying item dictionaries through to the service call.
+    """
+    favorites = next(p for p in BLUEPRINTS if p.name == "favorites.yaml")
+    text = favorites.read_text()
+    assert "map(attribute=" not in text, (
+        "mapping an attribute over item dictionaries in service data is what "
+        "broke this before — build flat lists of strings instead"
+    )
