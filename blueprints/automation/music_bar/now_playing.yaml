@@ -47,9 +47,20 @@ blueprint:
     device_name:
       name: Panel device name
       description: >-
-        The ESPHome name of the panel, e.g. music-bar-a1b2c3. Not the friendly
-        name.
-      default: music-bar
+        The ESPHome name of the panel — its hostname, not its friendly name.
+        Something like `music-bar-a1b2c3`: the firmware appends the MAC so
+        several unflashed panels do not collide on first boot.
+
+
+        Find it on the panel's **IP Address** or **Setup Status** entity, or in
+        Settings → Devices & Services → ESPHome. Get it wrong and Home
+        Assistant reports "unknown action: esphome.<name>_now_playing" in the
+        Repairs panel; the name in that message is what this field produced,
+        which is usually enough to spot the difference.
+
+
+        There is deliberately no default. A default here is worse than an empty
+        field: it looks configured, and fails later.
       selector:
         text:
     base_url:
@@ -76,6 +87,7 @@ triggers:
   # the state would update the panel when playback starts and never again.
   - trigger: state
     entity_id: !input ma_player
+    id: player_changed
 
   # A state trigger only fires on *change*, so a panel that connects while
   # music is already playing is told nothing and sits on stale text until the
@@ -84,10 +96,13 @@ triggers:
   # reconcile for any push missed in between.
   - trigger: event
     event_type: esphome.music_bar_hello
+    id: panel_hello
   - trigger: homeassistant
     event: start
+    id: ha_start
   - trigger: time_pattern
     minutes: "/1"
+    id: reconcile
 
 variables:
   # Order matters: Home Assistant evaluates these top to bottom, so anything
@@ -95,12 +110,35 @@ variables:
   player: !input ma_player
   base: !input base_url
   device_name_raw: !input device_name
+  # When the panel itself triggered this — it announces on every connect — use
+  # the name it reported rather than the configured one. That push is then
+  # correct even if the field is wrong, which is what makes the mismatch
+  # notification below possible: something has to work in order to complain.
+  reported: "{{ trigger.event.data.device if trigger.id == 'panel_hello' else '' }}"
   # ESPHome exposes each user-defined action as esphome.<node_name>_<action>,
   # with dashes turned into underscores.
-  prefix: "{{ device_name_raw | lower | replace('-', '_') }}"
+  prefix: "{{ (reported or device_name_raw) | lower | replace('-', '_') }}"
   picture: "{{ state_attr(player, 'entity_picture') }}"
 
 actions:
+  # The panel knows its own name; this automation was told one. When they
+  # disagree, every push driven by a player state change goes to an action that
+  # does not exist, and Home Assistant reports it as an unknown action without
+  # saying which field was wrong.
+  - if:
+      - condition: template
+        value_template: "{{ reported and reported != device_name_raw }}"
+    then:
+      - action: persistent_notification.create
+        data:
+          title: Music Bar
+          notification_id: music_bar_wrong_device_name
+          message: >-
+            This panel calls itself `{{ reported }}`, but the Music Bar — Now
+            Playing automation is set to `{{ device_name_raw }}`. Edit the
+            automation and set the panel device name to `{{ reported }}`, or it
+            will only update when the panel reconnects.
+
   - action: "esphome.{{ prefix }}_now_playing"
     data:
       title: "{{ state_attr(player, 'media_title') or '' }}"
