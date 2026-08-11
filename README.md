@@ -36,8 +36,8 @@ asking for a device, and pull requests adding one, are both welcome.
 | The device→Home Assistant contract | **Built** — exposed as entities, so the panel is drivable before the screen exists |
 | Artwork normalizer | **Built** — tested against a live library |
 | Device-drawn monograms (the shared hash) | **Built** — device and script verified to agree |
-| Blueprints (favorites, prev/next, now playing) | **Built** — validated offline; the round trip is not yet confirmed against a live Home Assistant |
-| Display, touch, backlight, LVGL layout | **Built** — ported from `hifi-panel`; compiles and runs, still being checked on glass |
+| Blueprints (favorites, prev/next, now playing) | **Working on hardware** — the panel asks, Home Assistant answers, favorites render |
+| Display, touch, backlight, LVGL layout | **Working on hardware** — setup screen, Now Playing with artwork, and a five-tile browser |
 | Artwork integration and playlist resume | **Not written** |
 
 Measured on the reference panel rather than assumed: PSRAM comes up as 8192 KB

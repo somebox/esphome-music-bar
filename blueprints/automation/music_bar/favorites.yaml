@@ -327,7 +327,12 @@ actions:
               - variables:
                   total: "{{ fav_names | count }}"
                   pages: "{{ [ (total / page_size) | round(0, 'ceil') | int, 1 ] | max }}"
-                  index: "{{ trigger.event.data.page | int(0) }}"
+                  # Clamped here rather than on the panel, which cannot know
+                  # how many pages there are until it has been told. Asking for
+                  # a page past the end otherwise answers with an empty one,
+                  # which looks identical to having no favorites.
+                  index: >-
+                    {{ [ [ trigger.event.data.page | int(0), pages | int(1) - 1 ] | min, 0 ] | max }}
                   first: "{{ index * page_size }}"
 
               # An empty library is a legitimate state — someone with nothing
