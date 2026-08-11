@@ -443,6 +443,10 @@ script:
             target = 0;
           }
           id(page_requested) = target;
+          // Log what the panel asks for, not only what it is told. Without
+          // this, "Home Assistant never answered" and "the panel never asked"
+          // look identical from the log.
+          ESP_LOGI("music_bar", "-> asking for page %d", id(page_requested));
       - homeassistant.event:
           event: esphome.music_bar_page
           data:
@@ -505,6 +509,9 @@ script:
           } else {
             id(pending_index) = (id(favorite_index) + delta % total + total) % total;
           }
+      - lambda: |-
+          ESP_LOGI("music_bar", "-> asking to play favorite %d of %d",
+                   id(pending_index), id(favorite_total));
       - homeassistant.event:
           event: esphome.music_bar_play_index
           data:
