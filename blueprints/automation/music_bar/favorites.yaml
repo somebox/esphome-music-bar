@@ -176,7 +176,12 @@ actions:
           # validation with "Unexpected value for condition: 'None'".
           - if:
               - condition: template
-                value_template: "{{ not entry }}"
+                # config_entry_id() returns None for an entity belonging to no
+                # config entry, and that can reach a template as the string
+                # "None" — which is truthy, and would sail past a bare
+                # `not entry` into a library call with a nonsense entry id.
+                value_template: >-
+                  {{ not entry or entry in ['None', 'none', 'unknown', 'unavailable'] }}
             then:
               - action: persistent_notification.create
                 data:
@@ -195,6 +200,10 @@ actions:
               for_each: "{{ types }}"
               sequence:
                 - action: music_assistant.get_library
+                  # One failing media type must not abort the branch: the panel
+                  # would then never be answered at all and would just sit
+                  # there. Fewer favorites is bad; silence is worse.
+                  continue_on_error: true
                   data:
                     config_entry_id: "{{ entry }}"
                     media_type: "{{ repeat.item }}"
@@ -237,6 +246,29 @@ actions:
                   pages: "{{ [ (total / page_size) | round(0, 'ceil') | int, 1 ] | max }}"
                   index: "{{ trigger.event.data.page | int(0) }}"
                   window: "{{ favorites[index * page_size : index * page_size + page_size] }}"
+
+              # An empty library is a legitimate state — someone with nothing
+              # favorited — but it is also exactly what a failing get_library
+              # looks like, and the panel cannot tell the two apart. Say which
+              # it is somewhere a person can read it.
+              - if:
+                  - condition: template
+                    value_template: "{{ total | int(0) == 0 }}"
+                then:
+                  - action: persistent_notification.create
+                    data:
+                      title: Music Bar
+                      notification_id: music_bar_no_favorites
+                      message: >-
+                        The panel asked for favorites and Music Assistant
+                        returned none for {{ types | join(', ') }}. If you do
+                        have favorites of those kinds then the library call is
+                        failing rather than the library being empty — check
+                        that {{ player }} is a Music Assistant player. The
+                        config entry used was: {{ entry }}
+
+              # Sent even when empty, so the panel can say "nothing favorited"
+              # instead of sitting on a stale page with no explanation.
               - action: "esphome.{{ prefix }}_page"
                 data:
                   page: "{{ index }}"
@@ -244,9 +276,7 @@ actions:
                   total_items: "{{ total }}"
                   names: "{{ window | map(attribute='name') | list }}"
                   uris: "{{ window | map(attribute='uri') | list }}"
-                  # Empty until the artwork integration is installed. An empty
-                  # URL is not a failure: the panel draws its own monogram for
-                  # that tile and never touches an image slot, which is also
-                  # what keeps it away from the PSRAM fragmentation that
-                  # varying artwork sizes cause.
+                  # Empty until the artwork integration is installed. Not a
+                  # failure: the panel draws its own monogram for a tile with
+                  # no URL and never allocates an image buffer.
                   art_urls: "{{ [''] * (window | count) }}"
