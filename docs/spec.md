@@ -644,11 +644,15 @@ Each needs its probe to pass before the design above depends on it.
 - **How slow is a page turn?** *Probe*: log the interval from tap to the fifth
   `on_download_finished`, cold and warm. Decide against a target of one second
   to first paint, artwork allowed to trail.
-- **Does the IMU auto-rotation actually flip the screen?** **Unverified** in the
-  prior build. The IMU reads reliably and `lvgl.display.set_rotation` is a real
-  runtime action whose rotation touch input follows, but the screen was never
-  observed rotating — the one hands-on test was discarded by a debounce window.
-  Gravity is inferred to sit on the Y axis; Z is the untried alternative.
+- **Does the IMU auto-rotation actually flip the screen?** The sensor half is
+  now **proven**: with the panel lying flat it reads Y = 0.01 g and Z = 0.99 g,
+  which is gravity on Z and exactly the dead band the logic ignores, so nothing
+  rotates — correct. What remains **unverified** is a completed flip, because
+  that needs the panel stood upright and turned over by hand. *Probe*: stand it
+  up and confirm Y goes to about -1 g, then invert it and confirm Y reaches
+  about +1 g and the screen follows within three seconds. If Y stays near zero
+  in both positions, the flip axis is Z rather than Y and the Tilt Z sensor is
+  already wired up to switch to.
 - **Does a tile survive a library rebuild?** The name-based design predicts yes,
   with no user action. *Probe*: rebuild the MA library and turn a page.
 - **How is "the next favorite" derived from what is playing?** Prev/next step
