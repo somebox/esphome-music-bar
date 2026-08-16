@@ -998,6 +998,7 @@ font:
       - "\U000F04AD"  # skip-next
       - "\U000F01D8"  # dots-horizontal
       - "\U000F0141"  # chevron-left
+      - "\U000F004D"  # arrow-left (browser Back)
       - "\U000F0142"  # chevron-right
       - "\U000F0439"  # radio
       - "\U000F0B47"  # playlist-music
@@ -1265,32 +1266,29 @@ lvgl:
       scrollable: false
       scrollbar_mode: "OFF"
       widgets:
-        # Left chevron pages back, and on the first page it is the way out.
-        # Without that the browser is a room with no door: the only other exit
-        # is playing something, which is not what someone who opened it to look
-        # around wants to have to do.
+        # Left is Back, always. Right is Forward, always, and cycles.
+        #
+        # Paging both ways sounds more capable and is worse to use: with a long
+        # list you spend the whole time deciding which chevron gets you there
+        # sooner, and neither one leaves. One direction plus a way out is fewer
+        # decisions per tap, and forward-cycling means the far end of the list
+        # is reachable without ever reversing.
         - button:
-            id: btn_page_prev
+            id: btn_browser_back
             x: 0
             y: 0
             width: 46
             height: 172
             radius: 0
             on_press:
-              - if:
-                  condition:
-                    lambda: "return id(page_index) <= 0;"
-                  then:
-                    - lvgl.page.show: page_now_playing
-                  else:
-                    - script.execute:
-                        id: request_page
-                        page: !lambda "return id(page_index) - 1;"
+              - lvgl.page.show: page_now_playing
             widgets:
               - label:
                   align: CENTER
-                  text: "\U000F0141"
+                  text: "\U000F004D"
                   text_font: font_icon
+        # Forward only, wrapping past the last page back to the first — the
+        # wrap is in request_page, which knows how many pages there are.
         - button:
             id: btn_page_next
             x: 594

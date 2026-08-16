@@ -46,6 +46,24 @@ requests adding one, are both welcome.
 **Music Assistant.** The panel uses MA's library API for the favorites list,
 MA's image proxy for artwork, and `play_media` for playback.
 
+### The board can do more than this project asks of it
+
+Worth recording, because it is the obvious question anyone reading the hardware
+list will have. Alongside the screen and the IMU, the panel carries an ES8311
+DAC, an ES7210 ADC, a dual microphone array with echo cancellation, and a
+speaker header. `esphome/devices/waveshare-3.49.yaml` lists the rest.
+
+None of it is used, and that is a scope decision rather than an oversight: this
+is a controller, and Music Assistant drives real speakers. But it means the same
+hardware could plausibly be **a Music Assistant player in its own right**, or a
+voice satellite — ESPHome supports both, and a panel that shows what is playing,
+lets you change it, and can also be spoken to is a coherent product rather than
+a pile of features.
+
+That is a different project from this one, and it would change the memory budget
+(the framebuffer and six image slots already account for most of what PSRAM is
+for). Recorded so the option is a decision rather than a discovery.
+
 Both dependencies track current releases. The project does not carry
 compatibility shims for older ESPHome or Music Assistant versions; where a
 recent version does something usefully better, the floor moves.

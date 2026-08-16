@@ -25,6 +25,11 @@ YAML     = $(DEVICE).yaml
 #
 # The first flash of a panel running other firmware has to be over the cable;
 # OTA needs the panel already running a build of this project.
+#
+# A serial port does not identify what is on the other end of it. If more than
+# one board is ever plugged into this machine, prefer OTA by hostname — which
+# is unambiguous — and check `esphome logs PORT=...` before uploading to a
+# port. Flashing this firmware onto something else is a bad afternoon.
 PORT ?=
 DEVICE_ARG = $(if $(PORT),--device $(PORT),)
 FACTORY_YAML := music-bar.factory.factory.yaml
