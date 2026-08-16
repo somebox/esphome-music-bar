@@ -397,6 +397,28 @@ more thing to run, but nothing to invalidate.
 Either way the device only ever sees `<base>/<slug>.png`, and the base URL is
 configuration.
 
+### `fmt=png` does not apply to SVG sources
+
+**Proven** on 2.10.0rc1: a station whose upstream artwork is an SVG comes back
+from the proxy as `200 image/svg+xml` with an `<svg` body, `fmt=png` ignored.
+BBC Radio 4 is one — its logo is
+`sounds.files.bbci.co.uk/.../colour_default.svg`.
+
+Nothing on the device can decode that, and neither can Pillow. It matters in two
+places:
+
+- The normalizer recognises it and falls back to a monogram, reporting those
+  items separately from ones that simply have no artwork — a station with a
+  perfectly good logo showing initials is otherwise baffling. An override is the
+  fix.
+- Now Playing artwork goes straight from Music Assistant to the panel's PNG
+  slot, so a station like this shows the placeholder glyph. That is the tier-2
+  path working as designed rather than a fault, but it is a visible one.
+
+Rasterising SVG would need a renderer the normalizer does not carry. Left alone
+deliberately: the override path already covers it, and it is a handful of
+stations.
+
 ### What is still true of MA's proxy
 
 The normalizer fetches from MA at `?size=256&fmt=png`, never from the raw

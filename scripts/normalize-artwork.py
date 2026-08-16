@@ -182,6 +182,19 @@ def fetch(url: str, timeout: int = 20) -> Fetched:
 # ── Naming ──────────────────────────────────────────────────────────────────
 
 
+def looks_like_svg(data: bytes) -> bool:
+    """Music Assistant's proxy passes SVG sources through untouched.
+
+    `?fmt=png` is honoured for raster sources and silently ignored for vector
+    ones — **proven** on 2.10.0rc1, where BBC Radio 4's logo comes back as
+    `200 image/svg+xml` with an `<svg` body. Nothing on the device can decode
+    that, and neither can Pillow, so it has to be recognised rather than
+    treated as a corrupt download.
+    """
+    head = data[:200].lstrip()[:100].lower()
+    return head.startswith(b"<svg") or (head.startswith(b"<?xml") and b"<svg" in data[:400].lower())
+
+
 def slugify(name: str) -> str:
     """Fold accents to ASCII first, so "Fréquence K" becomes frequence_k rather
     than fr_quence_k — the filename has to be one a person would guess."""
@@ -664,6 +677,7 @@ def main() -> int:
         out_dir.mkdir(parents=True, exist_ok=True)
 
     previous = load_previous(out_dir)
+    svg_items: list[str] = []
     manifest = []
     counts = {"override": 0, "music_assistant": 0, "monogram": 0, "kept": 0}
     unreachable: list[str] = []
@@ -691,6 +705,12 @@ def main() -> int:
                     image = normalize(got.data, px, mat, inset)
                     if image is not None:
                         source = "music_assistant"
+                elif got.data and looks_like_svg(got.data):
+                    # Real artwork that simply cannot be used. Distinct from
+                    # "no artwork", so the report can say so and the user knows
+                    # an override is the fix rather than wondering why a
+                    # station with a perfectly good logo shows initials.
+                    svg_items.append(f"{item['name']} ({slug})")
                 elif got.transient:
                     # Do not answer a question MA failed to answer. If this tile
                     # already has real artwork, keep the file and its fingerprint
@@ -752,6 +772,15 @@ def main() -> int:
         f"{counts['monogram']} generated"
         + (f", {counts['kept']} kept from the last run" if counts["kept"] else "")
     )
+
+    if svg_items:
+        print(
+            f"\n{len(svg_items)} item(s) have SVG artwork, which Music Assistant\n"
+            f"passes through unconverted and nothing here can rasterise. They are\n"
+            f"showing initials; drop a PNG in {overrides_dir} to fix one:"
+        )
+        for name in svg_items:
+            print(f"    {name}")
 
     if collisions:
         print(
