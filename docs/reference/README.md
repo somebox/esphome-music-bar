@@ -1,23 +1,35 @@
 # Reference material
 
-`hifi-panel.yaml` is the working single-file build this project was extracted
-from: one Waveshare ESP32-S3-Touch-LCD-3.49 next to a WiiM streamer, built
-August 2026. It is kept here unmodified because its comments record findings
-that were expensive to learn and are not written down anywhere else — the
-AXS15231B pin map and init, why LVGL rotation and touch transforms interact the
-way they do, what Music Assistant's image proxy actually returns, and several
-ways an image decodes cleanly and still renders wrong.
+## hifi-panel
 
-It is **not built**. Nothing in the repo includes it, and it will not validate
-as-is: it carries a baked API key, an OTA password and `!secret` references
-this project deliberately does not use.
+The working single-file build this project was extracted from: one Waveshare
+ESP32-S3-Touch-LCD-3.49 next to a WiiM streamer, built August 2026.
 
-What was carried across, and where it went:
+**It is not in this repository, and should not be added to it.** The file
+carries a baked `api.encryption.key` and an OTA password for a live device, and
+this repo is public. It lives in the ESPHome dashboard on the Home Assistant
+host, which is the copy to consult.
+
+Its comments record findings that were expensive to learn, so they were carried
+across rather than left behind:
 
 | From hifi-panel | Now lives in |
 |---|---|
-| SPI/QSPI pins, display, touch, backlight, I2C buses | `esphome/devices/waveshare-3.49.yaml` |
-| Fonts, MDI codepoints, LVGL theme, Now Playing layout | `esphome/music-bar.base.yaml` |
-| The artwork traps (byte order, alpha, re-binding on download) | comments on the `image:` block in the base |
-| Build-time station logos, generated radio pages | dropped — the browser is one page rewritten at runtime |
-| IMU auto-rotation | not ported yet; it was never confirmed working |
+| QSPI pins, display, touch, backlight, I2C buses | `esphome/devices/waveshare-3.49.yaml` |
+| QMI8658 orientation logic, thresholds and debounce | same file, `check_orientation` |
+| Fonts, verified MDI codepoints, LVGL theme, Now Playing layout | `esphome/music-bar.base.yaml` |
+| The artwork traps — byte order, alpha, re-binding on download | comments on the `image:` block in the base |
+| Album-art decode cost, proxy behaviour, the two-port quirk | `docs/spec.md` §4 and §6 |
+
+Two things were deliberately **not** carried across:
+
+- **Build-time station logos.** hifi-panel compiled each station logo into flash
+  as `image: platform: file` at 84×84, which is why its browser tiles showed
+  artwork. It also meant changing your favorites required regenerating the
+  config and reflashing — the single thing this rewrite exists to remove. Tile
+  artwork returns as runtime images fed by the normalizer; see `docs/plan.md`
+  phase 4.
+- **A second JPEG image slot.** hifi-panel carried one because Spotify Connect
+  has no Music Assistant proxy path, so its artwork is a CDN JPEG and `format:`
+  is fixed at compile time. This project has only the PNG slot; artwork for a
+  Spotify Connect stream will not decode until that is added back.
