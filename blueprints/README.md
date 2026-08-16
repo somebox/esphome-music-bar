@@ -57,6 +57,27 @@ panel shows nothing while music is definitely playing, it is usually because
 playback was started on one of those entities and the panel is watching the
 other.
 
+### The speaker's own integration is not in the playback path
+
+Worth knowing, because it saves chasing the wrong thing. Music Assistant talks
+to a WiiM (or any LinkPlay, Sonos, Chromecast…) through its **own** provider —
+on the reference install the player id is `wiim_uuid:FF98FCDE-…`, which is Music
+Assistant's, not Home Assistant's.
+
+So the chain is:
+
+    panel -> event -> this blueprint -> music_assistant.play_media
+          -> Music Assistant -> its own provider -> speaker
+
+Home Assistant's WiiM integration — the official one or a custom replacement —
+creates a *parallel* media_player entity that observes the same speaker. It is
+not involved in anything the panel does, and changing or replacing it cannot
+affect whether tapping a tile plays something.
+
+It affects exactly one thing: the metadata and artwork Now Playing shows, and
+only if you pointed Now Playing at that entity rather than at the Music
+Assistant one.
+
 ## What you need to know
 
 **The panel's device name.** Now Playing asks for it, because it is triggered by
