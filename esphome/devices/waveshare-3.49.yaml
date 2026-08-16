@@ -228,7 +228,7 @@ sensor:
     disabled_by_default: true
     accuracy_decimals: 2
     filters:
-      - throttle: 60s
+      - throttle: 10s
     on_raw_value:
       - lambda: "id(accel_y_raw) = x;"
       - script.execute: check_orientation
@@ -245,7 +245,7 @@ sensor:
     disabled_by_default: true
     accuracy_decimals: 2
     filters:
-      - throttle: 60s
+      - throttle: 10s
 
 globals:
   # The latest raw reading, because the published sensor is throttled and its

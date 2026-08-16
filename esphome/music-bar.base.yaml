@@ -175,6 +175,10 @@ api:
       then:
         - lambda: |-
             id(favorite_index) = index;
+            // Home Assistant calls this at the end of a play, so it doubles as
+            // an acknowledgement: seeing it means the branch ran to completion,
+            // and not seeing it after a tap means it did not.
+            ESP_LOGI("music_bar", "<- Home Assistant set favorite index %d", index);
 
     # Now Playing. Pushed as flat fields rather than a media player entity
     # because the useful values are scattered across Music Assistant's entity
@@ -474,6 +478,10 @@ script:
           condition:
             lambda: "return !id(pending_uri).empty();"
           then:
+            - lambda: |-
+                ESP_LOGI("music_bar", "-> asking to play tile %d: %s (%s)",
+                         id(pending_index), id(pending_name).c_str(),
+                         id(pending_uri).c_str());
             - homeassistant.event:
                 event: esphome.music_bar_play
                 data:

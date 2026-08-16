@@ -135,7 +135,13 @@ actions:
         sequence:
           - action: media_player.media_play_pause
             target:
-              entity_id: "{{ player }}"
+              # !input directly, not "{{ player }}". Every service call in this
+              # blueprint that carries no target works, and both that used a
+              # templated target silently did nothing — the panel sent a valid
+              # request, Home Assistant never completed the branch, and Music
+              # Assistant's queue stayed empty. A blueprint input can be placed
+              # in target: as-is, so there is no template to go wrong.
+              entity_id: !input ma_player
 
       # ── A tile was tapped ────────────────────────────────────────────────
       # The panel sends the URI it was given rather than a name, so nothing is
@@ -148,7 +154,13 @@ actions:
         sequence:
           - action: music_assistant.play_media
             target:
-              entity_id: "{{ player }}"
+              # !input directly, not "{{ player }}". Every service call in this
+              # blueprint that carries no target works, and both that used a
+              # templated target silently did nothing — the panel sent a valid
+              # request, Home Assistant never completed the branch, and Music
+              # Assistant's queue stayed empty. A blueprint input can be placed
+              # in target: as-is, so there is no template to go wrong.
+              entity_id: !input ma_player
             data:
               media_id: "{{ trigger.event.data.uri }}"
               enqueue: replace
@@ -312,7 +324,7 @@ actions:
                     value_template: "{{ 0 <= wanted < (fav_uris | count) }}"
                   - action: music_assistant.play_media
                     target:
-                      entity_id: "{{ player }}"
+                      entity_id: !input ma_player
                     data:
                       media_id: "{{ fav_uris[wanted] }}"
                       enqueue: replace
