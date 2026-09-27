@@ -2,6 +2,8 @@
 
 A quick way to put one of your **Music Assistant** favorites on a speaker.
 
+![The hifi-panel build on Waveshare 3.49 hardware, showing station artwork, track metadata and transport controls](docs/images/panel.jpg)
+
 An ESPHome touch bar that sits next to the speaker, shows what's playing, and
 lets you pick something else in one tap. **Prev and next move between your
 favorites, not between tracks** — it's a station selector, not a second remote
@@ -218,22 +220,6 @@ Rows marked *planned* depend on the blueprints, which are not written yet.
 | **You rename an item in Music Assistant** | The new name makes a new slug, so the old override filename stops matching and the tile falls back to a monogram. The normalizer works out which orphaned file goes with which newly-monogrammed item and prints the `mv` to fix it. |
 | **You set an image in Music Assistant itself** | Picked up on the next normalizer run, no override needed. Only possible for stations you added manually — provider-sourced ones are not editable, which is what `overrides/` is for. |
 | **Two items of different types share a name** | Both tiles survive. The second gets a suffixed filename (`blue_album.png`) and the run says so. |
-
-## Prior art
-
-An extraction of `hifi-panel`, a working single-file config built in August
-2026 for a WiiM speaker — though the speaker was incidental, since the panel
-only ever talks to Music Assistant. That build settled album art decoding, LVGL
-rotation, touch hit-testing and the image proxy's real behaviour;
-[`docs/spec.md`](docs/spec.md) carries those findings forward as constraints,
-and everything marked *proven* there was measured rather than assumed.
-[`docs/plan.md`](docs/plan.md) has the fuller story.
-
-![The hifi-panel build on the same Waveshare 3.49 hardware, showing station artwork, track metadata and transport controls](docs/images/panel.jpg)
-
-That is `hifi-panel` on the same hardware, not this repo's build — the display
-half of this project is still the part that has not been written. It is here to
-show where the layout is heading.
 
 ## License
 
