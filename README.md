@@ -17,7 +17,7 @@ control for whatever is already playing.
 - **Nothing is baked in.** Favorites, artwork and the player are all read at
   runtime, so changing them never means reflashing.
 
-Runs on the **Waveshare ESP32-S3-Touch-LCD-3.49** — a 640×172 touch bar — which
+Runs on the **[Waveshare ESP32-S3-Touch-LCD-3.49](https://www.waveshare.com/esp32-s3-touch-lcd-3.49.htm)** — a 640×172 touch bar — which
 is the only device supported today. Everything board-specific lives in one
 device profile, so adding another is a new file rather than a refactor. Issues
 asking for a device, and pull requests adding one, are both welcome.
